@@ -1,0 +1,7 @@
+.env
+.python-version
+clip_bot.log
+tiktok.com_cookies.txt
+token.pickle
+__pycache__/
+.venv
