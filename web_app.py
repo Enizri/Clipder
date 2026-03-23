@@ -1,6 +1,6 @@
 """
-Clipder - Swipe through Twitch clips
-All bugs fixed + Fullscreen feature
+Clipder Pro - Twitch clip discovery
+Features: No cropping, clean professional design, proper spacing
 """
 
 import threading
@@ -83,535 +83,238 @@ def fetch_clips():
     clips_queue = final_queue
     return len(clips_queue)
 
-
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Clipder - Swipe for Clips</title>
+    <title>Clipder</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
-            font-family: 'Outfit', sans-serif;
-            background: radial-gradient(ellipse at top, #1e1b4b, #0f172a);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #0a0a0a;
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
             overflow: hidden;
-            color: #f8fafc;
+            color: #ffffff;
             position: relative;
         }
         
         body::before {
             content: '';
             position: fixed;
-            top: -50%; left: -50%;
-            width: 200%; height: 200%;
-            background: radial-gradient(circle, rgba(99, 102, 241, 0.1) 0%, transparent 70%);
-            animation: rotate 20s linear infinite;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: radial-gradient(circle at 20% 50%, rgba(120, 60, 220, 0.06) 0%, transparent 50%),
+                        radial-gradient(circle at 80% 50%, rgba(220, 60, 120, 0.06) 0%, transparent 50%);
             pointer-events: none;
-        }
-        
-        @keyframes rotate {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
+            z-index: 0;
         }
         
         .app-container {
-            width: 100%;
-            max-width: 440px;
-            height: 95vh;
-            display: flex;
-            flex-direction: column;
-            padding: 20px;
-            position: relative;
-            z-index: 1;
+            width: 100%; max-width: 480px; height: 100vh;
+            display: flex; flex-direction: column; padding: 0;
+            position: relative; z-index: 1;
         }
         
         header { 
-            text-align: center; 
-            margin-bottom: 25px;
-            animation: fadeInDown 0.6s ease;
+            position: fixed; top: 0; left: 50%; transform: translateX(-50%);
+            width: 100%; max-width: 480px; padding: 20px 24px;
+            background: linear-gradient(to bottom, rgba(10, 10, 10, 0.98) 60%, transparent 100%);
+            backdrop-filter: blur(20px); z-index: 100;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
         }
         
-        @keyframes fadeInDown {
-            from { opacity: 0; transform: translateY(-20px); }
-            to { opacity: 1; transform: translateY(0); }
+        .header-content { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+        header h1 { font-size: 1.6em; font-weight: 900; color: #ffffff; letter-spacing: -0.5px; }
+        
+        .logo-accent {
+            background: linear-gradient(135deg, #8b5cf6, #ec4899);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         }
         
-        header h1 { 
-            font-size: 2.2em; 
-            margin-bottom: 8px; 
-            font-weight: 800;
-            background: linear-gradient(135deg, #a78bfa, #ec4899);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            letter-spacing: -1px;
-        }
-        
-        .stats { 
-            display: flex; 
-            justify-content: center; 
-            gap: 20px; 
-            font-size: 0.9em; 
-            color: #cbd5e1;
-            font-weight: 600;
-        }
-        
-        .stat-item {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 14px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 20px;
-            backdrop-filter: blur(10px);
-        }
+        .stats { display: flex; gap: 10px; font-size: 0.75em; color: #666; font-weight: 600; }
+        .stat-item { padding: 4px 10px; background: rgba(255, 255, 255, 0.02); border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.04); }
+        .stat-value { color: #ffffff; margin-left: 4px; }
         
         .swipe-container { 
-            flex: 1; 
-            position: relative; 
-            margin-bottom: 30px;
-            perspective: 1500px;
+            flex: 1; position: relative; padding: 100px 20px 160px 20px;
+            display: flex; align-items: center; justify-content: center;
         }
         
-        #card-stack { 
-            position: relative; 
-            width: 100%; 
-            height: 100%;
-        }
+        #card-stack { position: relative; width: 100%; max-width: 400px; height: 100%; max-height: 680px; }
         
         .clip-card {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(145deg, #1e293b, #0f172a);
-            border-radius: 24px;
-            box-shadow: 
-                0 20px 60px rgba(0, 0, 0, 0.5),
-                inset 0 1px 0 rgba(255, 255, 255, 0.1);
-            cursor: grab;
-            overflow: hidden;
-            transform-origin: 50% 50%;
-            transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), 
-                        box-shadow 0.6s ease;
+            position: absolute; width: 100%; height: 100%;
+            background: #141414; border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05);
+            cursor: grab; overflow: visible; transform-origin: 50% 50%;
+            transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.4s ease;
             user-select: none;
-            border: 1px solid rgba(255, 255, 255, 0.1);
         }
         
-        /* SMOOTH HOVER - AESTHETIC POP */
-        .clip-card:hover:not(.dragging) {
-            transform: scale(1.05) translateY(-10px) !important;
-            box-shadow: 
-                0 30px 80px rgba(99, 102, 241, 0.3),
-                0 0 60px rgba(236, 72, 153, 0.2),
-                inset 0 1px 0 rgba(255, 255, 255, 0.2);
-            z-index: 1000 !important;
-            border-color: rgba(167, 139, 250, 0.4);
+        /* The Card itself stays mostly still now, only lifting slightly to avoid layout bugs */
+        .clip-card.top-card:hover:not(.dragging) {
+            transform: translateY(-2px) !important;
+            box-shadow: 0 25px 70px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(139, 92, 246, 0.2);
+            z-index: 999 !important;
         }
         
-        .clip-card.dragging {
-            cursor: grabbing;
-            transition: none !important;
-        }
+        .clip-card.dragging { cursor: grabbing; transition: none !important; }
 
         .clip-preview {
-            position: relative;
-            width: 100%;
-            height: 65%;
-            background: #000;
-            border-radius: 24px 24px 0 0;
-            overflow: hidden;
-        }
-        
-        .clip-thumbnail {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            transition: transform 0.6s ease, opacity 0.4s ease;
+            position: relative; width: 100%; aspect-ratio: 9/16;
+            background: #000000; border-radius: 16px 16px 0 0; overflow: hidden;
+            /* Anchored to the bottom so it NEVER covers the text below! */
+            transform-origin: bottom center; 
+            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
             z-index: 2;
         }
         
-        .clip-card:hover:not(.dragging) .clip-thumbnail {
-            transform: scale(1.05);
+        /* THE FLOATING CINEMA EFFECT */
+        .clip-card.top-card:hover:not(.dragging) .clip-preview {
+            /* Scales wider (1.14x) and detaches upward (-14px) */
+            transform: scale(1.14) translateY(-14px);
+            /* Rounds the bottom corners now that it's floating */
+            border-radius: 12px;
+            box-shadow: 0 30px 60px rgba(0,0,0,0.9), 0 0 0 1px rgba(139, 92, 246, 0.5);
+            z-index: 10;
         }
         
-        .video-player {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            object-fit: cover;
+        .blur-bg-container {
+            position: absolute; top: -10%; left: -10%; width: 120%; height: 120%;
+            z-index: 0; filter: blur(30px); opacity: 0.6;
+        }
+        
+        .blur-bg-container img { width: 100%; height: 100%; object-fit: cover; }
+        
+        .clip-thumbnail, .video-player {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            object-fit: contain !important; /* Shows the full width of the video perfectly */
             z-index: 1;
-            opacity: 0;
-            transition: opacity 0.4s ease;
         }
         
-        .video-player.playing {
-            opacity: 1;
-        }
+        .clip-thumbnail { transition: opacity 0.3s ease; z-index: 2; }
         
-        .play-overlay {
-            position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            width: 70px; height: 70px;
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 28px;
-            color: #000;
-            pointer-events: none;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-            z-index: 3;
-        }
-        
-        .clip-card:hover:not(.dragging) .play-overlay {
-            transform: translate(-50%, -50%) scale(1.2);
-            background: linear-gradient(135deg, #a78bfa, #ec4899);
-            color: white;
-        }
+        .video-player { z-index: 1; opacity: 0; transition: opacity 0.3s ease; }
+        .video-player.playing { opacity: 1; }
         
         .video-loading {
-            position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            width: 40px; height: 40px;
-            border: 3px solid rgba(255, 255, 255, 0.2);
-            border-top-color: #a78bfa;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            z-index: 5;
-            opacity: 0;
-            transition: opacity 0.3s;
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 36px; height: 36px; border: 2px solid rgba(255, 255, 255, 0.1);
+            border-top-color: #8b5cf6; border-radius: 50%;
+            animation: spin 0.7s linear infinite; z-index: 5; opacity: 0; transition: opacity 0.3s;
         }
         
         .video-loading.active { opacity: 1; }
+        @keyframes spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
         
-        @keyframes spin {
-            to { transform: translate(-50%, -50%) rotate(360deg); }
-        }
-        
-        /* FULLSCREEN BUTTON */
         .fullscreen-btn {
-            position: absolute;
-            top: 15px; right: 15px;
-            width: 40px; height: 40px;
-            background: rgba(15, 23, 42, 0.9);
-            backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 12px;
-            color: white;
-            font-size: 18px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            opacity: 0;
-            transform: translateY(-10px);
-            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-            z-index: 10;
+            position: absolute; top: 10px; right: 10px; width: 32px; height: 32px;
+            background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px;
+            color: white; font-size: 14px; cursor: pointer; display: flex;
+            align-items: center; justify-content: center; opacity: 0; transition: all 0.2s; z-index: 10;
         }
         
-        .clip-card:hover:not(.dragging) .fullscreen-btn {
-            opacity: 1;
-            transform: translateY(0);
-        }
+        .clip-card.top-card:hover:not(.dragging) .fullscreen-btn { opacity: 1; }
+        .fullscreen-btn:hover { background: rgba(0, 0, 0, 0.7); }
         
-        .fullscreen-btn:hover {
-            background: linear-gradient(135deg, #6366f1, #8b5cf6);
-            transform: scale(1.1);
-            box-shadow: 0 4px 16px rgba(99, 102, 241, 0.5);
-        }
-        
-        /* VOLUME CONTROL */
         .volume-control {
-            position: absolute;
-            bottom: 15px; right: 15px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            background: rgba(15, 23, 42, 0.9);
-            backdrop-filter: blur(20px);
-            padding: 10px 16px;
-            border-radius: 50px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            opacity: 0;
-            transform: translateY(10px);
-            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-            z-index: 10;
+            position: absolute; bottom: 10px; right: 10px; display: flex; align-items: center; gap: 0;
+            background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(10px); padding: 0;
+            border-radius: 50px; border: 1px solid rgba(255, 255, 255, 0.1); opacity: 0;
+            transition: all 0.2s; z-index: 10; overflow: hidden; width: 32px; height: 32px;
         }
         
-        .clip-card:hover:not(.dragging) .volume-control {
-            opacity: 1;
-            transform: translateY(0);
-        }
+        .clip-card.top-card:hover:not(.dragging) .volume-control { opacity: 1; }
+        .volume-control:hover { width: 130px; padding-right: 10px; gap: 8px; background: rgba(0, 0, 0, 0.7); }
         
         .volume-btn {
-            width: 36px; height: 36px;
-            background: linear-gradient(135deg, #6366f1, #8b5cf6);
-            border: none;
-            color: white;
-            font-size: 18px;
-            cursor: pointer;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: transform 0.2s, box-shadow 0.2s;
-            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
-        }
-        
-        .volume-btn:hover {
-            transform: scale(1.15);
+            width: 32px; height: 32px; background: transparent; border: none; color: white;
+            font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
         }
         
         .volume-slider {
-            width: 90px; height: 6px;
-            -webkit-appearance: none;
-            appearance: none;
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 3px;
-            outline: none;
-            cursor: pointer;
+            width: 70px; height: 3px; -webkit-appearance: none; appearance: none;
+            background: rgba(255, 255, 255, 0.15); border-radius: 2px; outline: none; cursor: pointer;
+            opacity: 0; transition: opacity 0.2s;
         }
         
-        .volume-slider::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            appearance: none;
-            width: 18px; height: 18px;
-            background: linear-gradient(135deg, #a78bfa, #ec4899);
-            border-radius: 50%;
-            cursor: pointer;
-            box-shadow: 0 3px 8px rgba(167, 139, 250, 0.5);
-        }
-        
-        .volume-slider::-moz-range-thumb {
-            width: 18px; height: 18px;
-            background: linear-gradient(135deg, #a78bfa, #ec4899);
-            border-radius: 50%;
-            cursor: pointer;
-            border: none;
-            box-shadow: 0 3px 8px rgba(167, 139, 250, 0.5);
-        }
+        .volume-control:hover .volume-slider { opacity: 1; }
+        .volume-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 10px; height: 10px; background: white; border-radius: 50%; cursor: pointer; }
+        .volume-slider::-moz-range-thumb { width: 10px; height: 10px; background: white; border-radius: 50%; cursor: pointer; border: none; }
 
+        /* Separated z-index and position to keep it permanently below the video popout */
         .clip-info { 
-            padding: 24px;
-            background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.3));
+            position: relative; padding: 18px; background: #141414; 
+            border-radius: 0 0 16px 16px; z-index: 1; 
         }
-        
-        .clip-title { 
-            font-size: 1.15em; 
-            font-weight: 700; 
-            margin-bottom: 12px;
-            color: #f8fafc;
-            line-height: 1.4;
-            display: -webkit-box; 
-            -webkit-line-clamp: 2; 
-            -webkit-box-orient: vertical; 
-            overflow: hidden;
-        }
-        
-        .clip-meta { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
-            margin-bottom: 12px;
-        }
-        
-        .views-badge, .duration-badge { 
-            display: inline-flex; 
-            align-items: center; 
-            gap: 6px;
-            background: rgba(99, 102, 241, 0.2);
-            border: 1px solid rgba(99, 102, 241, 0.3);
-            color: #c7d2fe;
-            padding: 6px 12px; 
-            border-radius: 16px; 
-            font-weight: 600; 
-            font-size: 0.85em;
-        }
-        
-        .creator { 
-            color: #94a3b8; 
-            font-size: 0.9em; 
-            font-weight: 500;
-        }
+        .clip-title { font-size: 1em; font-weight: 600; margin-bottom: 10px; color: #ffffff; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .clip-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .views-badge, .duration-badge { display: inline-flex; align-items: center; gap: 4px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05); color: #666; padding: 4px 8px; border-radius: 10px; font-weight: 600; font-size: 0.75em; }
+        .creator { color: #555; font-size: 0.8em; font-weight: 500; }
         
         .action-buttons { 
-            display: flex; 
-            justify-content: center; 
-            gap: 25px; 
-            margin-bottom: 25px;
-            animation: fadeInUp 0.6s ease 0.2s both;
-        }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
+            position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 480px;
+            display: flex; justify-content: center; align-items: center; gap: 16px; padding: 24px 20px 30px 20px;
+            background: linear-gradient(to top, rgba(10, 10, 10, 0.98) 60%, transparent 100%);
+            backdrop-filter: blur(20px); z-index: 100; border-top: 1px solid rgba(255, 255, 255, 0.03);
         }
         
         .btn-reject, .btn-accept {
-            width: 70px; height: 70px; 
-            border-radius: 50%; 
-            border: none; 
-            cursor: pointer;
-            font-size: 1.8em; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center;
-            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            width: 58px; height: 58px; border-radius: 50%; border: 2px solid; cursor: pointer; font-size: 1.4em; 
+            display: flex; align-items: center; justify-content: center; transition: all 0.2s;
         }
-        
-        .btn-reject {
-            background: linear-gradient(135deg, #ef4444, #dc2626);
-            color: white;
-            box-shadow: 0 8px 24px rgba(239, 68, 68, 0.4);
-        }
-        
-        .btn-accept {
-            background: linear-gradient(135deg, #10b981, #059669);
-            color: white;
-            box-shadow: 0 8px 24px rgba(16, 185, 129, 0.4);
-        }
-        
-        .btn-reject:hover, .btn-accept:hover { 
-            transform: scale(1.15) translateY(-3px);
-        }
-        
-        .btn-reject:active, .btn-accept:active { 
-            transform: scale(0.95); 
-        }
+        .btn-reject { background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.25); color: #ef4444; }
+        .btn-accept { background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.25); color: #10b981; }
+        .btn-reject:hover { transform: scale(1.08); background: rgba(239, 68, 68, 0.15); border-color: rgba(239, 68, 68, 0.4); }
+        .btn-accept:hover { transform: scale(1.08); background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.4); }
+        .btn-reject:active, .btn-accept:active { transform: scale(0.96); }
         
         .btn-process {
-            background: linear-gradient(135deg, #6366f1, #8b5cf6);
-            color: white; 
-            border: none; 
-            padding: 16px 36px; 
-            border-radius: 30px;
-            font-size: 1em; 
-            font-weight: 700; 
-            cursor: pointer; 
-            box-shadow: 0 8px 24px rgba(99, 102, 241, 0.4);
-            transition: all 0.3s;
-            width: 100%; 
-            max-width: 280px; 
-            margin: 0 auto; 
-            display: block;
+            background: linear-gradient(135deg, #8b5cf6, #ec4899); color: white; border: none; padding: 14px 28px; 
+            border-radius: 14px; font-size: 0.9em; font-weight: 700; cursor: pointer; box-shadow: 0 6px 20px rgba(139, 92, 246, 0.35);
+            transition: all 0.2s; width: 100%; max-width: 260px; margin: 12px auto 0 auto; display: block;
         }
-        
-        .btn-process:hover { 
-            transform: translateY(-3px);
-            box-shadow: 0 12px 32px rgba(99, 102, 241, 0.5);
-        }
-        
+        .btn-process:hover { transform: translateY(-2px); box-shadow: 0 8px 28px rgba(139, 92, 246, 0.45); }
         .hidden { display: none !important; }
         
         #loading {
-            position: fixed; 
-            top: 0; left: 0; 
-            width: 100%; height: 100%;
-            background: rgba(15, 23, 42, 0.95); 
-            backdrop-filter: blur(10px);
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            justify-content: center; 
-            z-index: 9999;
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(10, 10, 10, 0.98); 
+            backdrop-filter: blur(10px); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9999;
         }
+        .spinner { width: 44px; height: 44px; border: 3px solid rgba(255,255,255,0.08); border-top-color: #8b5cf6; border-radius: 50%; animation: spin 0.7s linear infinite; }
         
-        .spinner {
-            width: 50px; height: 50px; 
-            border: 4px solid rgba(255,255,255,0.1); 
-            border-top-color: #a78bfa;
-            border-radius: 50%; 
-            animation: spin 0.8s linear infinite;
-        }
-        
-        #empty-state { 
-            text-align: center; 
-            padding: 60px 20px;
-        }
-        
-        #empty-state h2 { 
-            font-size: 2em; 
-            margin-bottom: 15px;
-            background: linear-gradient(135deg, #a78bfa, #ec4899);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        
-        .refresh-btn {
-            background: linear-gradient(135deg, #6366f1, #8b5cf6);
-            color: white; 
-            border: none; 
-            padding: 14px 32px;
-            border-radius: 25px; 
-            font-weight: 600; 
-            cursor: pointer; 
-            transition: all 0.3s;
-            box-shadow: 0 8px 24px rgba(99, 102, 241, 0.4);
-        }
-        
-        .refresh-btn:hover { 
-            transform: translateY(-3px);
-        }
+        #empty-state { text-align: center; padding: 50px 20px; }
+        #empty-state h2 { font-size: 1.6em; margin-bottom: 10px; font-weight: 800; color: #ffffff; }
+        #empty-state p { color: #555; margin-bottom: 20px; }
+        .refresh-btn { background: rgba(255, 255, 255, 0.08); color: white; border: 1px solid rgba(255, 255, 255, 0.15); padding: 12px 24px; border-radius: 10px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .refresh-btn:hover { background: rgba(255, 255, 255, 0.12); }
         
         .swipe-hint {
-            position: absolute; 
-            top: 50px; 
-            font-size: 2.8em; 
-            font-weight: 900; 
-            padding: 8px 20px;
-            border-radius: 16px; 
-            opacity: 0; 
-            transition: opacity 0.3s;
-            pointer-events: none; 
-            z-index: 100;
-            text-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            position: absolute; top: 30px; font-size: 2.2em; font-weight: 900; padding: 4px 12px;
+            border-radius: 10px; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 100;
         }
-        
-        .swipe-hint.left { 
-            left: 30px; 
-            color: #ef4444;
-            background: rgba(239, 68, 68, 0.2);
-            border: 2px solid #ef4444;
-        }
-        
-        .swipe-hint.right { 
-            right: 30px; 
-            color: #10b981;
-            background: rgba(16, 185, 129, 0.2);
-            border: 2px solid #10b981;
-        }
-        
-        .clip-card.swiping-left .swipe-hint.left,
-        .clip-card.swiping-right .swipe-hint.right { 
-            opacity: 1; 
-        }
+        .swipe-hint.left { left: 16px; color: #ef4444; background: rgba(239, 68, 68, 0.12); border: 2px solid rgba(239, 68, 68, 0.25); }
+        .swipe-hint.right { right: 16px; color: #10b981; background: rgba(16, 185, 129, 0.12); border: 2px solid rgba(16, 185, 129, 0.25); }
+        .clip-card.swiping-left .swipe-hint.left, .clip-card.swiping-right .swipe-hint.right { opacity: 1; }
     </style>
 </head>
 <body>
     <div class="app-container">
         <header>
-            <h1>🔥 Clipder</h1>
-            <div class="stats">
-                <div class="stat-item">
-                    <span>📊</span>
-                    <span id="queue-count">0 clips</span>
-                </div>
-                <div class="stat-item" style="color: #10b981;">
-                    <span>✨</span>
-                    <span id="accepted-count">0 selected</span>
+            <div class="header-content">
+                <h1>Clip<span class="logo-accent">der</span></h1>
+                <div class="stats">
+                    <div class="stat-item"><span id="queue-count">0</span></div>
+                    <div class="stat-item" style="color: #10b981;"><span id="accepted-count">0</span> ✓</div>
                 </div>
             </div>
         </header>
@@ -619,9 +322,9 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         <div class="swipe-container">
             <div id="card-stack"></div>
             <div id="empty-state" class="hidden">
-                <h2>🎉 All Done!</h2>
+                <h2>All Done</h2>
                 <p>No more clips to review</p>
-                <button onclick="location.reload()" class="refresh-btn">🔄 Refresh Clips</button>
+                <button onclick="location.reload()" class="refresh-btn">Refresh</button>
             </div>
         </div>
         
@@ -630,16 +333,16 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             <button class="btn-accept" onclick="swipeRight()">♥</button>
         </div>
         
-        <div>
+        <div style="padding: 0 20px;">
             <button id="process-btn" class="btn-process hidden" onclick="processAccepted()">
-                🚀 Process <span id="process-count">0</span> Clips
+                Process <span id="process-count">0</span> Clips
             </button>
         </div>
     </div>
     
     <div id="loading" class="hidden">
         <div class="spinner"></div>
-        <p style="margin-top: 20px; font-weight: 600; font-size: 1.1em;">Loading clips...</p>
+        <p style="margin-top: 16px; font-weight: 600; color: #666;">Loading...</p>
     </div>
 
     <script>
@@ -681,11 +384,19 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                 stack.appendChild(card);
             }
             
-            const topCard = stack.querySelector('.clip-card');
-            if (topCard) {
-                makeCardSwipeable(topCard);
-                setupVideoHover(topCard);
-            }
+            const allCards = stack.querySelectorAll('.clip-card');
+            allCards.forEach((card, index) => {
+                if (index === 0) {
+                    card.classList.add('top-card'); 
+                    card.style.pointerEvents = 'auto';
+                    makeCardSwipeable(card);
+                    setupVideoHover(card);
+                    preloadVideoUrl(card);
+                } else {
+                    card.classList.remove('top-card');
+                    card.style.pointerEvents = 'none';
+                }
+            });
         }
         
         function createCard(clip, stackIndex) {
@@ -695,24 +406,25 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             card.dataset.clipUrl = clip.url;
             
             card.style.zIndex = 100 - stackIndex;
-            card.style.transform = `scale(${1 - stackIndex * 0.04}) translateY(${stackIndex * 12}px)`;
-            card.style.opacity = 1 - stackIndex * 0.15;
+            card.style.transform = `scale(${1 - stackIndex * 0.03}) translateY(${stackIndex * 10}px)`;
+            card.style.opacity = 1 - stackIndex * 0.12;
             
             const views = clip.view_count >= 1000 ? (clip.view_count/1000).toFixed(1) + 'K' : clip.view_count;
             
             card.innerHTML = `
                 <div class="clip-preview">
+                    <div class="blur-bg-container">
+                        <img src="${clip.thumbnail_url}" draggable="false">
+                    </div>
                     <img src="${clip.thumbnail_url}" class="clip-thumbnail" draggable="false">
-                    <video class="video-player" preload="metadata" loop playsinline muted></video>
+                    <video class="video-player" preload="metadata" loop playsinline></video>
                     <div class="video-loading"></div>
-                    <div class="play-overlay">▶</div>
                     <button class="fullscreen-btn" onclick="event.stopPropagation(); openFullscreen(this)" title="Fullscreen">⛶</button>
                     <div class="volume-control">
                         <button class="volume-btn" onclick="event.stopPropagation(); toggleMute(this)">
                             <span class="volume-icon">🔊</span>
                         </button>
                         <input type="range" class="volume-slider" min="0" max="100" value="70" 
-                               onclick="event.stopPropagation()" 
                                oninput="event.stopPropagation(); changeVolume(this)">
                     </div>
                 </div>
@@ -727,21 +439,30 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                 <div class="swipe-hint left">NOPE</div>
                 <div class="swipe-hint right">LIKE</div>
             `;
-            
             return card;
+        }
+
+        async function preloadVideoUrl(card) {
+            if (card.dataset.videoUrlFetched) return;
+            const video = card.querySelector('.video-player');
+            try {
+                const response = await fetch(`/api/clip/${card.dataset.clipId}/video-url`);
+                const data = await response.json();
+                if (data.video_url) {
+                    video.src = data.video_url;
+                    video.preload = 'auto';
+                    card.dataset.videoUrlFetched = 'true';
+                }
+            } catch (e) { console.error('Preload failed', e); }
         }
         
         function setupVideoHover(card) {
             const preview = card.querySelector('.clip-preview');
-            let hoverTimer = null;
-            
             preview.addEventListener('mouseenter', () => {
                 if (isDragging) return;
-                hoverTimer = setTimeout(() => startVideoPlay(card), 150);
+                startVideoPlay(card);
             });
-            
             preview.addEventListener('mouseleave', () => {
-                clearTimeout(hoverTimer);
                 if (!isDragging) stopVideoPlay(card);
             });
         }
@@ -751,84 +472,65 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             
             const video = card.querySelector('.video-player');
             const thumbnail = card.querySelector('.clip-thumbnail');
-            const playOverlay = card.querySelector('.play-overlay');
             const loading = card.querySelector('.video-loading');
+            const icon = card.querySelector('.volume-icon');
             
-            // If video already loaded, just play
+            const attemptPlay = async () => {
+                try {
+                    video.muted = false;
+                    video.volume = 0.7;
+                    await video.play();
+                    icon.textContent = '🔊';
+                } catch (err) {
+                    video.muted = true;
+                    try {
+                        await video.play();
+                        icon.textContent = '🔇';
+                    } catch (err2) {
+                        console.log("All autoplay blocked");
+                    }
+                }
+                video.classList.add('playing');
+                thumbnail.style.opacity = '0';
+                loading.classList.remove('active');
+            };
+
             if (video.src && video.readyState >= 2) {
-                video.muted = false; // FIX: Unmute when playing
-                video.play().then(() => {
-                    video.classList.add('playing');
-                    thumbnail.style.opacity = '0';
-                    playOverlay.style.opacity = '0';
-                }).catch(e => console.log('Play prevented:', e));
+                attemptPlay();
                 return;
             }
             
             loading.classList.add('active');
-            
             try {
                 const response = await fetch(`/api/clip/${card.dataset.clipId}/video-url`);
                 const data = await response.json();
-                
                 if (data.video_url) {
                     video.src = data.video_url;
-                    video.volume = 0.7;
-                    video.muted = false; // FIX: Start unmuted
-                    
-                    video.addEventListener('loadeddata', () => {
-                        loading.classList.remove('active');
-                        video.play().then(() => {
-                            video.classList.add('playing');
-                            thumbnail.style.opacity = '0';
-                            playOverlay.style.opacity = '0';
-                        }).catch(e => {
-                            console.log('Autoplay prevented');
-                            loading.classList.remove('active');
-                        });
-                    }, { once: true });
-                    
-                    video.addEventListener('error', () => {
-                        loading.classList.remove('active');
-                        console.error('Video error');
-                    }, { once: true });
+                    video.addEventListener('loadeddata', attemptPlay, { once: true });
                 }
-            } catch (e) {
-                console.error('Failed to fetch video:', e);
-                loading.classList.remove('active');
-            }
+            } catch (e) { loading.classList.remove('active'); }
         }
 
         function stopVideoPlay(card) {
             const video = card.querySelector('.video-player');
             const thumbnail = card.querySelector('.clip-thumbnail');
-            const playOverlay = card.querySelector('.play-overlay');
-            
             video.pause();
             video.classList.remove('playing');
-            
             thumbnail.style.opacity = '1';
-            playOverlay.style.opacity = '1';
         }
         
         function openFullscreen(btn) {
             const card = btn.closest('.clip-card');
             const video = card.querySelector('.video-player');
-            
-            if (video.requestFullscreen) {
-                video.requestFullscreen();
-            } else if (video.webkitRequestFullscreen) {
-                video.webkitRequestFullscreen();
-            } else if (video.msRequestFullscreen) {
-                video.msRequestFullscreen();
-            }
+            if (video.requestFullscreen) { video.requestFullscreen(); } 
+            else if (video.webkitRequestFullscreen) { video.webkitRequestFullscreen(); } 
+            else if (video.msRequestFullscreen) { video.msRequestFullscreen(); }
         }
         
         function toggleMute(btn) {
             const card = btn.closest('.clip-card');
             const video = card.querySelector('.video-player');
             const icon = btn.querySelector('.volume-icon');
-            
             video.muted = !video.muted;
             icon.textContent = video.muted ? '🔇' : '🔊';
         }
@@ -837,133 +539,74 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             const card = slider.closest('.clip-card');
             const video = card.querySelector('.video-player');
             const icon = card.querySelector('.volume-icon');
-            
             video.volume = slider.value / 100;
-            
             if (slider.value == 0) {
-                icon.textContent = '🔇';
-                video.muted = true;
+                icon.textContent = '🔇'; video.muted = true;
             } else {
-                icon.textContent = '🔊';
-                video.muted = false;
+                icon.textContent = '🔊'; video.muted = false;
             }
         }
         
         function makeCardSwipeable(card) {
-            let startX = 0, currentX = 0;
-            let startTime = 0;
-            
+            let startX = 0, currentX = 0; let startTime = 0;
             const startDrag = (e) => {
                 if (e.target.closest('.volume-control') || e.target.closest('.fullscreen-btn')) return;
-                
-                isDragging = true;
-                startTime = Date.now();
-                card.classList.add('dragging');
-                
+                isDragging = true; startTime = Date.now(); card.classList.add('dragging');
                 const point = e.type.includes('mouse') ? e : e.touches[0];
-                startX = point.clientX;
-                currentX = startX;
-                
+                startX = point.clientX; currentX = startX;
                 stopVideoPlay(card);
             };
-            
             const doDrag = (e) => {
                 if (!isDragging) return;
                 e.preventDefault();
-                
                 const point = e.type.includes('mouse') ? e : e.touches[0];
-                currentX = point.clientX;
-                const deltaX = currentX - startX;
-                const rotation = deltaX * 0.03;
-                
+                currentX = point.clientX; const deltaX = currentX - startX; const rotation = deltaX * 0.03;
                 card.style.transition = 'none';
                 card.style.transform = `translate(${deltaX}px, 0) rotate(${rotation}deg)`;
-                
-                if (deltaX > 70) {
-                    card.classList.add('swiping-right');
-                    card.classList.remove('swiping-left');
-                } else if (deltaX < -70) {
-                    card.classList.add('swiping-left');
-                    card.classList.remove('swiping-right');
-                } else {
-                    card.classList.remove('swiping-left', 'swiping-right');
-                }
+                if (deltaX > 70) { card.classList.add('swiping-right'); card.classList.remove('swiping-left'); } 
+                else if (deltaX < -70) { card.classList.add('swiping-left'); card.classList.remove('swiping-right'); } 
+                else { card.classList.remove('swiping-left', 'swiping-right'); }
             };
-            
             const stopDrag = () => {
                 if (!isDragging) return;
-                
-                const deltaX = currentX - startX;
-                const duration = Date.now() - startTime;
-                const velocity = Math.abs(deltaX) / duration;
-                
-                isDragging = false;
-                card.classList.remove('dragging');
-                
-                // FIX: Proper swipe detection
-                if (Math.abs(deltaX) > 100 || velocity > 0.5) {
-                    // Swipe detected!
-                    animateSwipe(card, deltaX > 0 ? 'right' : 'left');
-                } else {
-                    // Snap back
-                    card.style.transition = 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)';
-                    card.style.transform = '';
-                    card.classList.remove('swiping-left', 'swiping-right');
-                    setTimeout(() => { card.style.transition = ''; }, 400);
+                const deltaX = currentX - startX; const duration = Date.now() - startTime; const velocity = Math.abs(deltaX) / duration;
+                isDragging = false; card.classList.remove('dragging');
+                if (Math.abs(deltaX) > 100 || velocity > 0.5) { animateSwipe(card, deltaX > 0 ? 'right' : 'left'); } 
+                else {
+                    card.style.transition = 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)';
+                    card.style.transform = ''; card.classList.remove('swiping-left', 'swiping-right');
+                    setTimeout(() => { card.style.transition = ''; }, 300);
                 }
             };
-
-            card.addEventListener('mousedown', startDrag);
-            document.addEventListener('mousemove', doDrag);
-            document.addEventListener('mouseup', stopDrag);
-            
-            card.addEventListener('touchstart', startDrag, {passive: false});
-            document.addEventListener('touchmove', doDrag, {passive: false});
-            document.addEventListener('touchend', stopDrag);
+            card.addEventListener('mousedown', startDrag); document.addEventListener('mousemove', doDrag); document.addEventListener('mouseup', stopDrag);
+            card.addEventListener('touchstart', startDrag, {passive: false}); document.addEventListener('touchmove', doDrag, {passive: false}); document.addEventListener('touchend', stopDrag);
         }
         
         function animateSwipe(card, direction) {
-            const distance = direction === 'right' ? 1500 : -1500;
-            const rotation = direction === 'right' ? 35 : -35;
-            
-            card.style.transition = 'transform 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.5s';
+            const distance = direction === 'right' ? 1500 : -1500; const rotation = direction === 'right' ? 30 : -30;
+            card.style.transition = 'transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s';
             card.style.transform = `translate(${distance}px, -100px) rotate(${rotation}deg)`;
             card.style.opacity = '0';
-            
             setTimeout(() => {
                 handleSwipe(card.dataset.clipId, direction);
-                currentIndex++;
-                renderCards();
-                updateStats();
-            }, 500);
+                currentIndex++; renderCards(); updateStats();
+            }, 400);
         }
         
         async function handleSwipe(clipId, direction) {
             const action = direction === 'right' ? 'accept' : 'reject';
             await fetch(`/api/clip/${clipId}/action`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({action})
+                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action})
             });
-            if (action === 'accept') {
-                acceptedClips.push(clipId);
-                updateProcessButton();
-            }
+            if (action === 'accept') { acceptedClips.push(clipId); updateProcessButton(); }
         }
         
-        function swipeLeft() {
-            const card = document.querySelector('.clip-card');
-            if (card && !isDragging) animateSwipe(card, 'left');
-        }
-        
-        function swipeRight() {
-            const card = document.querySelector('.clip-card');
-            if (card && !isDragging) animateSwipe(card, 'right');
-        }
+        function swipeLeft() { const card = document.querySelector('.clip-card.top-card'); if (card && !isDragging) animateSwipe(card, 'left'); }
+        function swipeRight() { const card = document.querySelector('.clip-card.top-card'); if (card && !isDragging) animateSwipe(card, 'right'); }
         
         function updateStats() {
-            document.getElementById('queue-count').textContent = `${clips.length - currentIndex} clips`;
-            document.getElementById('accepted-count').textContent = `${acceptedClips.length} selected`;
+            document.getElementById('queue-count').textContent = clips.length - currentIndex;
+            document.getElementById('accepted-count').textContent = acceptedClips.length;
         }
         
         function updateProcessButton() {
@@ -978,27 +621,20 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             document.getElementById('empty-state').classList.remove('hidden');
         }
         
-        function showLoading(show) {
-            document.getElementById('loading').classList.toggle('hidden', !show);
-        }
+        function showLoading(show) { document.getElementById('loading').classList.toggle('hidden', !show); }
         
         async function processAccepted() {
             if (!acceptedClips.length) return;
             showLoading(true);
             try {
                 await fetch('/api/process', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({clip_ids: acceptedClips})
                 });
                 alert(`✅ Processing ${acceptedClips.length} clips!`);
-                acceptedClips = [];
-                updateProcessButton();
-            } catch(e) {
-                alert('Error processing clips');
-            } finally {
-                showLoading(false);
-            }
+                acceptedClips = []; updateProcessButton();
+            } catch(e) { alert('Error processing clips'); } 
+            finally { showLoading(false); }
         }
         
         document.addEventListener('keydown', e => {
@@ -1008,7 +644,6 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
     </script>
 </body>
 </html>'''
-
 @app.route('/')
 def index():
     fetch_clips()
@@ -1101,13 +736,13 @@ def process_clips():
 
 if __name__ == '__main__':
     print("\n" + "="*60)
-    print("🔥 Clipder - Swipe through Twitch clips")
+    print("🔥 Clipder Pro - Professional Edition")
     print("="*60)
     print(f"Status: {bot_initialized}")
-    print("✅ Video with audio working")
-    print("✅ Smooth swiping fixed")
-    print("✅ Aesthetic hover pop-out")
-    print("✅ Fullscreen feature added")
+    print("✅ No video cropping - full aspect ratio")
+    print("✅ Clean professional design")
+    print("✅ Fixed header & footer - no overlap")
+    print("✅ Instant video playback")
     print("Open: http://localhost:5000")
     print("="*60 + "\n")
     app.run(debug=True, host='0.0.0.0', port=5000)
