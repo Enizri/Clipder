@@ -1,6 +1,6 @@
 """
 Clipder Pro - Twitch clip discovery
-Features: No cropping, clean professional design, proper spacing
+Features: No cropping, clean professional design, proper spacing, 100% full-frame video, timeline scrubber, flawless drag physics
 """
 
 import threading
@@ -83,6 +83,7 @@ def fetch_clips():
     clips_queue = final_queue
     return len(clips_queue)
 
+
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -155,11 +156,11 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             background: #141414; border-radius: 16px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05);
             cursor: grab; overflow: visible; transform-origin: 50% 50%;
-            transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.4s ease;
+            transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+            will-change: transform, opacity;
             user-select: none;
         }
         
-        /* The Card itself stays mostly still now, only lifting slightly to avoid layout bugs */
         .clip-card.top-card:hover:not(.dragging) {
             transform: translateY(-2px) !important;
             box-shadow: 0 25px 70px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(139, 92, 246, 0.2);
@@ -171,32 +172,31 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         .clip-preview {
             position: relative; width: 100%; aspect-ratio: 9/16;
             background: #000000; border-radius: 16px 16px 0 0; overflow: hidden;
-            /* Anchored to the bottom so it NEVER covers the text below! */
             transform-origin: bottom center; 
-            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+            transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), border-radius 0.3s;
             z-index: 2;
         }
         
-        /* THE FLOATING CINEMA EFFECT */
         .clip-card.top-card:hover:not(.dragging) .clip-preview {
-            /* Scales wider (1.14x) and detaches upward (-14px) */
-            transform: scale(1.14) translateY(-14px);
-            /* Rounds the bottom corners now that it's floating */
+            transform: scale(1.25) translateY(-12px);
             border-radius: 12px;
-            box-shadow: 0 30px 60px rgba(0,0,0,0.9), 0 0 0 1px rgba(139, 92, 246, 0.5);
+            box-shadow: 0 40px 80px rgba(0,0,0,1), 0 0 0 1px rgba(139, 92, 246, 0.4);
             z-index: 10;
         }
         
+        .clip-card:not(.top-card) .blur-bg-container { display: none !important; }
+        
         .blur-bg-container {
             position: absolute; top: -10%; left: -10%; width: 120%; height: 120%;
-            z-index: 0; filter: blur(30px); opacity: 0.6;
+            z-index: 0; filter: blur(25px); opacity: 0.4; 
+            transition: opacity 0.3s ease;
         }
         
         .blur-bg-container img { width: 100%; height: 100%; object-fit: cover; }
         
         .clip-thumbnail, .video-player {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            object-fit: contain !important; /* Shows the full width of the video perfectly */
+            object-fit: contain !important; 
             z-index: 1;
         }
         
@@ -226,8 +226,9 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         .clip-card.top-card:hover:not(.dragging) .fullscreen-btn { opacity: 1; }
         .fullscreen-btn:hover { background: rgba(0, 0, 0, 0.7); }
         
+        /* VOLUME CONTROL - Moved up so it doesn't hit the timeline */
         .volume-control {
-            position: absolute; bottom: 10px; right: 10px; display: flex; align-items: center; gap: 0;
+            position: absolute; bottom: 55px; right: 10px; display: flex; align-items: center; gap: 0;
             background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(10px); padding: 0;
             border-radius: 50px; border: 1px solid rgba(255, 255, 255, 0.1); opacity: 0;
             transition: all 0.2s; z-index: 10; overflow: hidden; width: 32px; height: 32px;
@@ -251,7 +252,40 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         .volume-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 10px; height: 10px; background: white; border-radius: 50%; cursor: pointer; }
         .volume-slider::-moz-range-thumb { width: 10px; height: 10px; background: white; border-radius: 50%; cursor: pointer; border: none; }
 
-        /* Separated z-index and position to keep it permanently below the video popout */
+        /* JITTER-FREE CUSTOM TIMELINE */
+        .progress-container {
+            position: absolute; 
+            bottom: 25px; /* Moved safely up from the edge! */
+            left: 20px; 
+            width: calc(100% - 40px); /* Adds nice padding to the sides */
+            height: 24px; /* Large invisible hit-box so mouse doesn't slip */
+            display: flex; align-items: center; z-index: 15; opacity: 0; 
+            transition: opacity 0.2s;
+        }
+        
+        .clip-card.top-card:hover:not(.dragging) .progress-container { opacity: 1; }
+        
+        .progress-slider {
+            width: 100%; height: 5px; -webkit-appearance: none; appearance: none;
+            background: rgba(255, 255, 255, 0.2); outline: none; margin: 0; cursor: pointer;
+            border-radius: 10px; backdrop-filter: blur(4px);
+            transition: height 0.2s;
+        }
+        
+        /* Expands when hovered for easier grabbing */
+        .progress-container:hover .progress-slider { height: 9px; }
+        
+        .progress-slider::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 16px; height: 16px; background: #ffffff;
+            border-radius: 50%; cursor: pointer; opacity: 0; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+            transition: opacity 0.2s, transform 0.2s;
+        }
+        
+        .progress-container:hover .progress-slider::-webkit-slider-thumb { 
+            opacity: 1; transform: scale(1.1); 
+        }
+
         .clip-info { 
             position: relative; padding: 18px; background: #141414; 
             border-radius: 0 0 16px 16px; z-index: 1; 
@@ -350,6 +384,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         let currentIndex = 0;
         let acceptedClips = [];
         let isDragging = false;
+        let isSwiping = false; 
         
         document.addEventListener('DOMContentLoaded', loadClips);
         
@@ -361,42 +396,26 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                 clips = data.clips;
                 currentIndex = 0;
                 updateStats();
-                renderCards();
+                
+                const stack = document.getElementById('card-stack');
+                stack.innerHTML = '';
+                if (clips.length === 0) {
+                    showEmptyState();
+                    return;
+                }
+                
+                for (let i = 0; i < Math.min(3, clips.length); i++) {
+                    const card = createCard(clips[i], i);
+                    stack.appendChild(card);
+                }
+                
+                setupTopCard();
             } catch(e) {
                 console.error(e);
                 alert('Failed to load clips');
             } finally {
                 showLoading(false);
             }
-        }
-        
-        function renderCards() {
-            const stack = document.getElementById('card-stack');
-            stack.innerHTML = '';
-            
-            if (currentIndex >= clips.length) {
-                showEmptyState();
-                return;
-            }
-            
-            for (let i = currentIndex; i < Math.min(currentIndex + 3, clips.length); i++) {
-                const card = createCard(clips[i], i - currentIndex);
-                stack.appendChild(card);
-            }
-            
-            const allCards = stack.querySelectorAll('.clip-card');
-            allCards.forEach((card, index) => {
-                if (index === 0) {
-                    card.classList.add('top-card'); 
-                    card.style.pointerEvents = 'auto';
-                    makeCardSwipeable(card);
-                    setupVideoHover(card);
-                    preloadVideoUrl(card);
-                } else {
-                    card.classList.remove('top-card');
-                    card.style.pointerEvents = 'none';
-                }
-            });
         }
         
         function createCard(clip, stackIndex) {
@@ -417,15 +436,19 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                         <img src="${clip.thumbnail_url}" draggable="false">
                     </div>
                     <img src="${clip.thumbnail_url}" class="clip-thumbnail" draggable="false">
-                    <video class="video-player" preload="metadata" loop playsinline></video>
+                    <video class="video-player" preload="metadata" loop playsinline ontimeupdate="updateProgress(this)"></video>
                     <div class="video-loading"></div>
                     <button class="fullscreen-btn" onclick="event.stopPropagation(); openFullscreen(this)" title="Fullscreen">⛶</button>
                     <div class="volume-control">
                         <button class="volume-btn" onclick="event.stopPropagation(); toggleMute(this)">
                             <span class="volume-icon">🔊</span>
                         </button>
-                        <input type="range" class="volume-slider" min="0" max="100" value="70" 
+                        <input type="range" class="volume-slider" min="0" max="100" value="30" 
                                oninput="event.stopPropagation(); changeVolume(this)">
+                    </div>
+                    <div class="progress-container">
+                        <input type="range" class="progress-slider" min="0" max="100" value="0" step="0.1" 
+                               oninput="event.stopPropagation(); seekVideo(this)">
                     </div>
                 </div>
                 <div class="clip-info">
@@ -440,6 +463,81 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                 <div class="swipe-hint right">LIKE</div>
             `;
             return card;
+        }
+
+        // Dynamic Color Fill for Custom Timeline
+        function updateProgress(video) {
+            const card = video.closest('.clip-card');
+            if (!card) return;
+            const slider = card.querySelector('.progress-slider');
+            if (slider && video.duration) {
+                const percent = (video.currentTime / video.duration) * 100;
+                slider.value = percent;
+                // Vibrant Pink/Purple Gradient Fill
+                slider.style.background = `linear-gradient(to right, #ec4899 ${percent}%, rgba(255, 255, 255, 0.2) ${percent}%)`;
+            }
+        }
+
+        function seekVideo(slider) {
+            const card = slider.closest('.clip-card');
+            const video = card.querySelector('.video-player');
+            if (video && video.duration) {
+                const seekTime = (slider.value / 100) * video.duration;
+                video.currentTime = seekTime;
+                slider.style.background = `linear-gradient(to right, #ec4899 ${slider.value}%, rgba(255, 255, 255, 0.2) ${slider.value}%)`;
+            }
+        }
+
+        function setupTopCard() {
+            const stack = document.getElementById('card-stack');
+            const allCards = stack.querySelectorAll('.clip-card');
+            
+            allCards.forEach((card, index) => {
+                if (index === 0) {
+                    card.classList.add('top-card'); 
+                    card.style.pointerEvents = 'auto';
+                    makeCardSwipeable(card);
+                    setupVideoHover(card);
+                    preloadVideoUrl(card);
+                } else {
+                    card.classList.remove('top-card');
+                    card.style.pointerEvents = 'none';
+                }
+            });
+        }
+
+        function advanceQueue(removedCard) {
+            const stack = document.getElementById('card-stack');
+            if (removedCard) {
+                removedCard.remove();
+            }
+            
+            currentIndex++;
+            updateStats();
+            
+            const nextIndex = currentIndex + 2; 
+            if (nextIndex < clips.length) {
+                const newCard = createCard(clips[nextIndex], 2);
+                newCard.style.pointerEvents = 'none';
+                stack.appendChild(newCard);
+            }
+            
+            const remainingCards = stack.querySelectorAll('.clip-card');
+            if (remainingCards.length === 0) {
+                showEmptyState();
+                return;
+            }
+            
+            remainingCards.forEach((card, index) => {
+                card.style.zIndex = 100 - index;
+                card.style.transform = `scale(${1 - index * 0.03}) translateY(${index * 10}px)`;
+                card.style.opacity = 1 - index * 0.12;
+            });
+            
+            setTimeout(() => { 
+                setupTopCard(); 
+                isSwiping = false; 
+            }, 50);
         }
 
         async function preloadVideoUrl(card) {
@@ -457,9 +555,12 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         }
         
         function setupVideoHover(card) {
+            if (card.dataset.hoverSetup === 'true') return;
+            card.dataset.hoverSetup = 'true';
+            
             const preview = card.querySelector('.clip-preview');
             preview.addEventListener('mouseenter', () => {
-                if (isDragging) return;
+                if (isDragging || isSwiping) return;
                 startVideoPlay(card);
             });
             preview.addEventListener('mouseleave', () => {
@@ -468,7 +569,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         }
 
         async function startVideoPlay(card) {
-            if (isDragging) return;
+            if (isDragging || isSwiping) return;
             
             const video = card.querySelector('.video-player');
             const thumbnail = card.querySelector('.clip-thumbnail');
@@ -478,7 +579,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             const attemptPlay = async () => {
                 try {
                     video.muted = false;
-                    video.volume = 0.7;
+                    video.volume = 0.3;
                     await video.play();
                     icon.textContent = '🔊';
                 } catch (err) {
@@ -486,9 +587,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                     try {
                         await video.play();
                         icon.textContent = '🔇';
-                    } catch (err2) {
-                        console.log("All autoplay blocked");
-                    }
+                    } catch (err2) { console.log("All autoplay blocked"); }
                 }
                 video.classList.add('playing');
                 thumbnail.style.opacity = '0';
@@ -514,9 +613,12 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         function stopVideoPlay(card) {
             const video = card.querySelector('.video-player');
             const thumbnail = card.querySelector('.clip-thumbnail');
-            video.pause();
-            video.classList.remove('playing');
-            thumbnail.style.opacity = '1';
+            if (video) {
+                video.pause();
+                video.muted = true;
+                video.classList.remove('playing');
+            }
+            if (thumbnail) thumbnail.style.opacity = '1';
         }
         
         function openFullscreen(btn) {
@@ -531,8 +633,14 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             const card = btn.closest('.clip-card');
             const video = card.querySelector('.video-player');
             const icon = btn.querySelector('.volume-icon');
+            const slider = card.querySelector('.volume-slider');
+            
             video.muted = !video.muted;
             icon.textContent = video.muted ? '🔇' : '🔊';
+            if(!video.muted && video.volume === 0) {
+                video.volume = 0.3;
+                slider.value = 30;
+            }
         }
         
         function changeVolume(slider) {
@@ -548,49 +656,99 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         }
         
         function makeCardSwipeable(card) {
+            if (card.dataset.swipeable === 'true') return;
+            card.dataset.swipeable = 'true';
+            
             let startX = 0, currentX = 0; let startTime = 0;
-            const startDrag = (e) => {
-                if (e.target.closest('.volume-control') || e.target.closest('.fullscreen-btn')) return;
-                isDragging = true; startTime = Date.now(); card.classList.add('dragging');
-                const point = e.type.includes('mouse') ? e : e.touches[0];
-                startX = point.clientX; currentX = startX;
-                stopVideoPlay(card);
-            };
+            let ticking = false; 
+            
             const doDrag = (e) => {
                 if (!isDragging) return;
                 e.preventDefault();
                 const point = e.type.includes('mouse') ? e : e.touches[0];
-                currentX = point.clientX; const deltaX = currentX - startX; const rotation = deltaX * 0.03;
-                card.style.transition = 'none';
-                card.style.transform = `translate(${deltaX}px, 0) rotate(${rotation}deg)`;
-                if (deltaX > 70) { card.classList.add('swiping-right'); card.classList.remove('swiping-left'); } 
-                else if (deltaX < -70) { card.classList.add('swiping-left'); card.classList.remove('swiping-right'); } 
-                else { card.classList.remove('swiping-left', 'swiping-right'); }
-            };
-            const stopDrag = () => {
-                if (!isDragging) return;
-                const deltaX = currentX - startX; const duration = Date.now() - startTime; const velocity = Math.abs(deltaX) / duration;
-                isDragging = false; card.classList.remove('dragging');
-                if (Math.abs(deltaX) > 100 || velocity > 0.5) { animateSwipe(card, deltaX > 0 ? 'right' : 'left'); } 
-                else {
-                    card.style.transition = 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)';
-                    card.style.transform = ''; card.classList.remove('swiping-left', 'swiping-right');
-                    setTimeout(() => { card.style.transition = ''; }, 300);
+                currentX = point.clientX;
+                
+                if (!ticking) {
+                    window.requestAnimationFrame(() => {
+                        if (!isDragging) return;
+                        const deltaX = currentX - startX; const rotation = deltaX * 0.03;
+                        card.style.transform = `translate(${deltaX}px, 0) rotate(${rotation}deg)`;
+                        if (deltaX > 70) { card.classList.add('swiping-right'); card.classList.remove('swiping-left'); } 
+                        else if (deltaX < -70) { card.classList.add('swiping-left'); card.classList.remove('swiping-right'); } 
+                        else { card.classList.remove('swiping-left', 'swiping-right'); }
+                        ticking = false;
+                    });
+                    ticking = true;
                 }
             };
-            card.addEventListener('mousedown', startDrag); document.addEventListener('mousemove', doDrag); document.addEventListener('mouseup', stopDrag);
-            card.addEventListener('touchstart', startDrag, {passive: false}); document.addEventListener('touchmove', doDrag, {passive: false}); document.addEventListener('touchend', stopDrag);
+            
+            const stopDrag = () => {
+                if (!isDragging) return;
+                isDragging = false; 
+                
+                document.removeEventListener('mousemove', doDrag); 
+                document.removeEventListener('mouseup', stopDrag);
+                document.removeEventListener('touchmove', doDrag); 
+                document.removeEventListener('touchend', stopDrag);
+                
+                card.classList.remove('dragging');
+                
+                const deltaX = currentX - startX; const duration = Date.now() - startTime; const velocity = Math.abs(deltaX) / duration;
+                
+                if (Math.abs(deltaX) > 100 || velocity > 0.5) { 
+                    card.classList.remove('top-card');
+                    animateSwipe(card, deltaX > 0 ? 'right' : 'left'); 
+                } else {
+                    card.style.transform = ''; 
+                    card.classList.remove('swiping-left', 'swiping-right');
+                }
+            };
+
+            const startDrag = (e) => {
+                if (e.target.closest('.volume-control') || e.target.closest('.fullscreen-btn') || e.target.closest('.progress-container')) return;
+                if (isSwiping) return; 
+                
+                isDragging = true; startTime = Date.now(); card.classList.add('dragging');
+                const point = e.type.includes('mouse') ? e : e.touches[0];
+                startX = point.clientX; currentX = startX;
+                stopVideoPlay(card);
+                
+                document.addEventListener('mousemove', doDrag); 
+                document.addEventListener('mouseup', stopDrag);
+                document.addEventListener('touchmove', doDrag, {passive: false}); 
+                document.addEventListener('touchend', stopDrag);
+            };
+            
+            card.addEventListener('mousedown', startDrag); 
+            card.addEventListener('touchstart', startDrag, {passive: false}); 
         }
         
         function animateSwipe(card, direction) {
-            const distance = direction === 'right' ? 1500 : -1500; const rotation = direction === 'right' ? 30 : -30;
-            card.style.transition = 'transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s';
+            if (isSwiping) return;
+            isSwiping = true; 
+
+            try {
+                const video = card.querySelector('.video-player');
+                if (video) {
+                    video.pause();
+                    video.muted = true;
+                    video.removeAttribute('src'); 
+                    video.load(); 
+                }
+            } catch(e) {}
+
+            const distance = direction === 'right' ? window.innerWidth : -window.innerWidth; 
+            const rotation = direction === 'right' ? 30 : -30;
+            
+            card.style.transition = 'transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 0.3s';
             card.style.transform = `translate(${distance}px, -100px) rotate(${rotation}deg)`;
             card.style.opacity = '0';
+            card.classList.remove('top-card'); 
+            
             setTimeout(() => {
+                advanceQueue(card); 
                 handleSwipe(card.dataset.clipId, direction);
-                currentIndex++; renderCards(); updateStats();
-            }, 400);
+            }, 300);
         }
         
         async function handleSwipe(clipId, direction) {
@@ -601,8 +759,20 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             if (action === 'accept') { acceptedClips.push(clipId); updateProcessButton(); }
         }
         
-        function swipeLeft() { const card = document.querySelector('.clip-card.top-card'); if (card && !isDragging) animateSwipe(card, 'left'); }
-        function swipeRight() { const card = document.querySelector('.clip-card.top-card'); if (card && !isDragging) animateSwipe(card, 'right'); }
+        function swipeLeft() { 
+            const card = document.querySelector('.clip-card.top-card'); 
+            if (card && !isDragging && !isSwiping) {
+                card.classList.remove('top-card'); 
+                animateSwipe(card, 'left'); 
+            }
+        }
+        function swipeRight() { 
+            const card = document.querySelector('.clip-card.top-card'); 
+            if (card && !isDragging && !isSwiping) {
+                card.classList.remove('top-card'); 
+                animateSwipe(card, 'right'); 
+            }
+        }
         
         function updateStats() {
             document.getElementById('queue-count').textContent = clips.length - currentIndex;
