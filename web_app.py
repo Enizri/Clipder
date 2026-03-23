@@ -1,5 +1,5 @@
 import threading
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template_string
 from pathlib import Path
 import json
 import sys
@@ -27,38 +27,68 @@ except Exception as e:
 app = Flask(__name__)
 
 # --- GLOBAL STATE ---
-clips_queue = []              
+category_queues = {}          # CHANGED: Now stores a queue for each category
 clip_metadata_store = {}      
 clip_scores = {}              
 clip_comments = {}            
 admin_upload_queue = {}       
 
-def fetch_clips():
-    global clips_queue, clip_metadata_store
-    clips_queue = []
-    if not bot_initialized: return 0
-    clips_by_channel = {}
-    for channel in config.twitch_channels:
-        broadcaster_id = twitch_client.get_broadcaster_id(channel)
-        if broadcaster_id:
-            all_clips = twitch_client.get_recent_clips(broadcaster_id, hours_back=72, fetch_count=100)
-            channel_clips = []
-            for clip in all_clips:
-                clip_data = {'id': clip['id'], 'title': clip['title'], 'url': clip['url'], 'thumbnail_url': clip['thumbnail_url'], 'view_count': clip['view_count'], 'creator_name': clip['creator_name'], 'duration': clip['duration'], 'created_at': clip['created_at'], 'channel': channel}
-                clip_metadata_store[clip['id']] = clip_data
-                if not state_manager.is_processed(clip["id"]) and clip["id"] not in admin_upload_queue and clip["id"] not in clip_scores:
-                    channel_clips.append(clip_data)
-            channel_clips.sort(key=lambda x: x['view_count'], reverse=True)
-            clips_by_channel[channel] = channel_clips
-    max_per_channel = 10
-    final_queue = []
-    channel_queues = {ch: clips[:max_per_channel] for ch, clips in clips_by_channel.items()}
-    while any(channel_queues.values()):
+# CHANGED: Replaced fetch_clips with category-aware fetching
+def fetch_clips_for_category(category_name: str) -> list:
+    if not bot_initialized: return []
+    
+    # 1. YOUR ORIGINAL LOGIC: "My Streamers"
+    if category_name == 'My Streamers':
+        clips_by_channel = {}
         for channel in config.twitch_channels:
-            if channel in channel_queues and channel_queues[channel]:
-                final_queue.append(channel_queues[channel].pop(0))
-    clips_queue = final_queue
-    return len(clips_queue)
+            broadcaster_id = twitch_client.get_broadcaster_id(channel)
+            if broadcaster_id:
+                all_clips = twitch_client.get_recent_clips(broadcaster_id, hours_back=72, fetch_count=100)
+                channel_clips = []
+                for clip in all_clips:
+                    clip_data = {'id': clip['id'], 'title': clip['title'], 'url': clip['url'], 'thumbnail_url': clip['thumbnail_url'], 'view_count': clip['view_count'], 'creator_name': clip['creator_name'], 'duration': clip['duration'], 'created_at': clip['created_at'], 'channel': channel}
+                    clip_metadata_store[clip['id']] = clip_data
+                    if not state_manager.is_processed(clip["id"]) and clip["id"] not in admin_upload_queue and clip["id"] not in clip_scores:
+                        channel_clips.append(clip_data)
+                channel_clips.sort(key=lambda x: x['view_count'], reverse=True)
+                clips_by_channel[channel] = channel_clips
+        max_per_channel = 10
+        final_queue = []
+        channel_queues = {ch: clips[:max_per_channel] for ch, clips in clips_by_channel.items()}
+        while any(channel_queues.values()):
+            for channel in config.twitch_channels:
+                if channel in channel_queues and channel_queues[channel]:
+                    final_queue.append(channel_queues[channel].pop(0))
+        return final_queue
+
+    # 2. NEW LOGIC: Specific Twitch Categories
+    else:
+        # Failsafe in case get_game_id isn't added to your core.py yet
+        if not hasattr(twitch_client, 'get_game_id'):
+            print(f"⚠️ get_game_id not in core.py yet. Unable to fetch {category_name}")
+            return []
+            
+        game_id = twitch_client.get_game_id(category_name)
+        if not game_id:
+            return []
+            
+        all_clips = twitch_client.get_recent_clips_by_game(game_id, hours_back=48, fetch_count=100)
+        
+        valid_clips = []
+        for clip in all_clips:
+            clip_data = {
+                'id': clip['id'], 'title': clip['title'], 'url': clip['url'],
+                'thumbnail_url': clip['thumbnail_url'], 'view_count': clip['view_count'],
+                'creator_name': clip['creator_name'], 'duration': clip['duration'],
+                'created_at': clip['created_at'], 'channel': clip.get('broadcaster_name', category_name)
+            }
+            clip_metadata_store[clip['id']] = clip_data
+            if not state_manager.is_processed(clip["id"]) and clip["id"] not in admin_upload_queue and clip["id"] not in clip_scores:
+                valid_clips.append(clip_data)
+                
+        valid_clips.sort(key=lambda x: x['view_count'], reverse=True)
+        return valid_clips[:30]
+
 
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
@@ -100,8 +130,24 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         
         .view-section { flex: 1; width: 100%; height: 100%; overflow: hidden; display: none; }
         .view-section.active { display: flex; flex-direction: column; align-items: center; }
+
+        /* --- ADDED: CATEGORY MENU PILLS --- */
+        .category-menu { 
+            width: 100%; max-width: 480px; padding: 20px 0px 0 0px; margin-top: 80px; 
+            display: flex; gap: 10px; overflow-x: auto; flex-shrink: 0; scrollbar-width: none; 
+            z-index: 50; cursor: grab; user-select: none; scroll-behavior: smooth;
+        }
+        .category-menu.dragging { cursor: grabbing; scroll-behavior: auto; }
+        .category-menu::-webkit-scrollbar { display: none; }
+        .cat-pill { 
+            padding: 8px 20px; border-radius: 50px; background: rgba(255,255,255,0.05); color: #aaa; 
+            font-weight: 600; cursor: pointer; white-space: nowrap; border: 1px solid rgba(255,255,255,0.05); 
+            transition: all 0.2s; font-size: 0.85em; 
+        }
+        .cat-pill:hover { background: rgba(255,255,255,0.1); color: #fff; }
+        .cat-pill.active { background: linear-gradient(135deg, #8b5cf6, #ec4899); color: #fff; border-color: transparent; font-weight: 700;}
         
-        /* SWIPE VIEW - BIG & PROFESSIONAL */
+        /* --- SWIPE VIEW (YOUR EXACT ORIGINAL CODE) --- */
         .swipe-container { width: 100%; max-width: 900px; flex: 1; position: relative; padding: 100px 20px; display: flex; align-items: center; justify-content: center; }
         #card-stack { position: relative; width: 100%; max-width: 460px; height: 100%; max-height: 750px; z-index: 10; }
         
@@ -149,7 +195,6 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         .progress-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: #ffffff; border-radius: 50%; opacity: 0; transition: opacity 0.2s, transform 0.2s; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
         .progress-container:hover .progress-slider::-webkit-slider-thumb { opacity: 1; transform: scale(1.1); }
         
-        /* INFO SECTION */
         .clip-info { position: relative; padding: 24px 20px; background: #141414; border-radius: 0 0 16px 16px; z-index: 1; }
         .clip-title { font-size: 1.15em; font-weight: 700; margin-bottom: 8px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .clip-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -160,36 +205,48 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         .social-btn { display: inline-flex; align-items: center; gap: 6px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #fff; padding: 6px 12px; border-radius: 12px; font-weight: 600; font-size: 0.85em; cursor: pointer; transition: all 0.2s; }
         .social-btn:hover { background: rgba(255, 255, 255, 0.15); transform: translateY(-1px); }
         
-        /* FLOATING SIDE ARROWS */
         .action-buttons { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-            width: 100%; max-width: 820px; display: flex; justify-content: space-between; align-items: center; z-index: 5; pointer-events: none; 
+            width: 100%; max-width: 920px; display: flex; justify-content: space-between; align-items: center; z-index: 5; pointer-events: none; 
         }
         .btn-side { 
-            pointer-events: auto; width: 85px; height: 85px; border-radius: 50%; border: 2px solid; 
+            pointer-events: auto; width: 120px; height: 160px; 
             cursor: pointer; display: flex; align-items: center; justify-content: center; 
-            background: rgba(20, 20, 20, 0.7); backdrop-filter: blur(12px); box-shadow: 0 15px 35px rgba(0,0,0,0.5); 
-            transition: transform 0.1s ease-out, box-shadow 0.1s ease-out, border-color 0.1s ease-out;
+            background: transparent; border: none; 
+            filter: drop-shadow(0 0 8px rgba(0,0,0,0.6));
+            transition: filter 0.25s ease, transform 0.25s ease;
         }
-        .btn-reject { border-color: rgba(239, 68, 68, 0.4); color: #ef4444; }
-        .btn-accept { border-color: rgba(16, 185, 129, 0.4); color: #10b981; }
+        .btn-side svg { width: 100%; height: 100%; }
+        .btn-reject { color: rgba(239, 68, 68, 0.35); }
+        .btn-accept { color: rgba(16, 185, 129, 0.35); }
         
-        /* Highlight states driven by JS Physics */
-        .btn-reject.highlight { transform: scale(1.2) translateX(-10px) rotate(-15deg); background: rgba(239, 68, 68, 0.2); box-shadow: 0 0 50px rgba(239, 68, 68, 0.6); border-color: #ef4444; }
-        .btn-accept.highlight { transform: scale(1.2) translateX(10px) rotate(15deg); background: rgba(16, 185, 129, 0.2); box-shadow: 0 0 50px rgba(16, 185, 129, 0.6); border-color: #10b981; }
-        
-        .btn-reject:hover { transform: scale(1.15) translateX(-8px) rotate(-15deg); background: rgba(239, 68, 68, 0.15); box-shadow: 0 0 30px rgba(239, 68, 68, 0.3); border-color: #ef4444; }
-        .btn-accept:hover { transform: scale(1.15) translateX(8px) rotate(15deg); background: rgba(16, 185, 129, 0.15); box-shadow: 0 0 30px rgba(16, 185, 129, 0.3); border-color: #10b981; }
+        .btn-reject.highlight { 
+            color: #ff2d2d;
+            filter: drop-shadow(0 0 25px rgba(255, 45, 45, 0.9)) drop-shadow(0 0 60px rgba(255, 45, 45, 0.5));
+            transform: scale(1.15) rotate(-5deg);
+        }
+        .btn-accept.highlight { 
+            color: #00ff88;
+            filter: drop-shadow(0 0 25px rgba(0, 255, 136, 0.9)) drop-shadow(0 0 60px rgba(0, 255, 136, 0.5));
+            transform: scale(1.15) rotate(5deg);
+        }
+        .btn-reject:hover { 
+            color: rgba(255, 80, 80, 0.7);
+            filter: drop-shadow(0 0 15px rgba(255, 80, 80, 0.5));
+            transform: scale(1.08) rotate(-3deg);
+        }
+        .btn-accept:hover { 
+            color: rgba(0, 220, 120, 0.7);
+            filter: drop-shadow(0 0 15px rgba(0, 220, 120, 0.5));
+            transform: scale(1.08) rotate(3deg);
+        }
 
         @media (max-width: 850px) {
             .action-buttons { top: auto; bottom: 30px; transform: translateX(-50%); max-width: 360px; z-index: 100;}
-            .btn-side { width: 64px; height: 64px; }
-            .btn-reject:hover { transform: scale(1.1) rotate(-10deg); }
-            .btn-accept:hover { transform: scale(1.1) rotate(10deg); }
+            .btn-side { width: 80px; height: 110px; }
             #card-stack { max-height: 600px; }
         }
 
-        /* --- DYNAMIC BUBBLY AURAS --- */
         .swipe-hint { 
             position: absolute; top: 15%; pointer-events: none; z-index: 100; 
             display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
@@ -333,13 +390,47 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 
     <div class="app-container">
         <div id="swipe" class="view-section active">
+            
+            <div class="category-menu" id="cat-menu">
+                <button class="cat-pill active" onclick="setCategory('My Streamers', this)">My Streamers</button>
+                {% for cat in categories %}
+                <button class="cat-pill" onclick="setCategory('{{cat}}', this)">{{cat}}</button>
+                {% endfor %}
+            </div>
+
             <div class="swipe-container">
                 <div class="action-buttons" id="action-btns">
                     <button class="btn-side btn-reject" onclick="triggerSwipeAnimation('left')" title="Skip">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v.5"/></svg>
+                        <svg viewBox="0 0 120 160" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Graffiti left arrow - spray paint style -->
+                            <g opacity="0.15"><circle cx="25" cy="80" r="18" fill="currentColor"/><circle cx="60" cy="65" r="8" fill="currentColor"/><circle cx="45" cy="100" r="5" fill="currentColor"/><circle cx="80" cy="75" r="3" fill="currentColor"/><circle cx="35" cy="55" r="4" fill="currentColor"/><circle cx="55" cy="110" r="3" fill="currentColor"/></g>
+                            <!-- Main arrow body -->
+                            <path d="M95 78 Q88 78 75 78 L45 78" stroke="currentColor" stroke-width="14" stroke-linecap="round" opacity="0.9"/>
+                            <!-- Arrow head - chunky graffiti style -->
+                            <path d="M55 55 L25 80 L55 105" stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                            <!-- Paint drips -->
+                            <path d="M30 95 Q30 115 32 125" stroke="currentColor" stroke-width="3" stroke-linecap="round" opacity="0.5"/>
+                            <path d="M50 105 Q49 118 50 122" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" opacity="0.4"/>
+                            <path d="M70 83 Q70 95 71 100" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
+                            <!-- SKIP text - graffiti tag style -->
+                            <text x="60" y="42" font-family="'Arial Black', Impact, sans-serif" font-size="20" font-weight="900" fill="currentColor" opacity="0.7" letter-spacing="3" transform="rotate(-8, 60, 42)">SKIP</text>
+                        </svg>
                     </button>
                     <button class="btn-side btn-accept" onclick="triggerSwipeAnimation('right')" title="Like">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v.5"/></svg>
+                        <svg viewBox="0 0 120 160" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Graffiti right arrow - spray paint style -->
+                            <g opacity="0.15"><circle cx="95" cy="80" r="18" fill="currentColor"/><circle cx="60" cy="65" r="8" fill="currentColor"/><circle cx="75" cy="100" r="5" fill="currentColor"/><circle cx="40" cy="75" r="3" fill="currentColor"/><circle cx="85" cy="55" r="4" fill="currentColor"/><circle cx="65" cy="110" r="3" fill="currentColor"/></g>
+                            <!-- Main arrow body -->
+                            <path d="M25 78 Q32 78 45 78 L75 78" stroke="currentColor" stroke-width="14" stroke-linecap="round" opacity="0.9"/>
+                            <!-- Arrow head - chunky graffiti style -->
+                            <path d="M65 55 L95 80 L65 105" stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                            <!-- Paint drips -->
+                            <path d="M90 95 Q90 115 88 125" stroke="currentColor" stroke-width="3" stroke-linecap="round" opacity="0.5"/>
+                            <path d="M70 105 Q71 118 70 122" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" opacity="0.4"/>
+                            <path d="M50 83 Q50 95 49 100" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.3"/>
+                            <!-- LIKE text - graffiti tag style -->
+                            <text x="60" y="42" font-family="'Arial Black', Impact, sans-serif" font-size="20" font-weight="900" fill="currentColor" opacity="0.7" letter-spacing="3" text-anchor="middle" transform="rotate(8, 60, 42)">LIKE</text>
+                        </svg>
                     </button>
                 </div>
                 
@@ -413,6 +504,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 
     <script>
         let clips = []; let currentIndex = 0; let isDragging = false; let isSwiping = false; 
+        let currentCategory = 'My Streamers';
         
         const EMOTES = {
             'Kappa': 'https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/1.0',
@@ -427,7 +519,30 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         
         let stackRect, rejectBtnRect, acceptBtnRect;
 
-        document.addEventListener('DOMContentLoaded', () => { loadClips(); refreshAdminQueue(); });
+        document.addEventListener('DOMContentLoaded', () => {
+            loadClips(); refreshAdminQueue();
+            
+            // --- DRAG-TO-SCROLL for category menu ---
+            const catMenu = document.getElementById('cat-menu');
+            let cmDown = false, cmStartX = 0, cmScrollLeft = 0, cmDragged = false;
+            catMenu.addEventListener('mousedown', (e) => {
+                cmDown = true; cmDragged = false; catMenu.classList.add('dragging');
+                cmStartX = e.pageX - catMenu.offsetLeft; cmScrollLeft = catMenu.scrollLeft;
+            });
+            catMenu.addEventListener('mouseleave', () => { cmDown = false; catMenu.classList.remove('dragging'); });
+            catMenu.addEventListener('mouseup', () => { cmDown = false; catMenu.classList.remove('dragging'); });
+            catMenu.addEventListener('mousemove', (e) => {
+                if (!cmDown) return; e.preventDefault();
+                const x = e.pageX - catMenu.offsetLeft;
+                const walk = (x - cmStartX) * 1.5;
+                if (Math.abs(walk) > 5) cmDragged = true;
+                catMenu.scrollLeft = cmScrollLeft - walk;
+            });
+            // Prevent click on pills if user was dragging
+            catMenu.addEventListener('click', (e) => {
+                if (cmDragged) { e.stopPropagation(); e.preventDefault(); cmDragged = false; }
+            }, true);
+        });
         
         function switchTab(tabId) {
             document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
@@ -440,10 +555,25 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             if (tabId === 'admin') refreshAdminQueue();
         }
 
-        async function loadClips() {
+        // --- NEW: ANTI-FREEZE CATEGORY SWITCHER ---
+        async function setCategory(catName, btn) {
+            // Immediately update UI to show click registration
+            document.querySelectorAll('.cat-pill').forEach(el => el.classList.remove('active'));
+            btn.classList.add('active');
+            currentCategory = catName;
+            document.getElementById('card-stack').innerHTML = '';
             showLoading(true);
+            
+            // Yield the thread to let the browser paint the loading screen
+            await new Promise(resolve => setTimeout(resolve, 50));
+            
+            // Now fetch the clips
+            await loadClips();
+        }
+
+        async function loadClips() {
             try {
-                const res = await fetch('/api/clips');
+                const res = await fetch(`/api/clips?category=${encodeURIComponent(currentCategory)}`);
                 clips = (await res.json()).clips; currentIndex = 0; renderCardStack();
             } catch(e) { console.error(e); } finally { showLoading(false); }
         }
@@ -493,7 +623,6 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                         </div>
                     </div>
                 </div>
-                
                 <div id="nope-hint" class="swipe-hint left">
                     <div class="aura-strings"></div>
                     <div class="hint-text-main">NOPE</div>
@@ -586,17 +715,15 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             video.muted = slider.value == 0;
         }
 
-        // --- DYNAMIC SWIPE LOGIC WITH THE "GENIE" SUCK ANIMATION ---
+        // --- SWIPE LOGIC (EXACTLY YOUR ORIGINAL LOGIC) ---
         function makeCardSwipeable(card) {
             if (card.dataset.swipeable === 'true') return; card.dataset.swipeable = 'true';
             let startX = 0, currentX = 0, ticking = false;
             
             const nopeHint = card.querySelector('#nope-hint');
             const likeHint = card.querySelector('#like-hint');
-            
             const rejectBtn = document.querySelector('.btn-reject');
             const acceptBtn = document.querySelector('.btn-accept');
-            const stack = document.getElementById('card-stack');
 
             const doDrag = (e) => {
                 if (!isDragging) return; e.preventDefault(); currentX = (e.type.includes('mouse') ? e : e.touches[0]).clientX;
@@ -604,62 +731,31 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                     window.requestAnimationFrame(() => {
                         if (!isDragging) return; const deltaX = currentX - startX; 
                         
-                        // Calculate Magnetic Sucking Physics
-                        const dragDistance = Math.abs(deltaX);
-                        const maxDrag = window.innerWidth / 3.5; 
-                        const rawProgress = Math.min(1, dragDistance / maxDrag);
-                        
-                        // Exponential easing for the suck effect
-                        const suckEase = Math.pow(rawProgress, 3); 
-                        const scale = 1 - (suckEase * 0.9); // Shrinks to 10%
-                        const rot = deltaX * 0.05; 
-                        
-                        let targetX = deltaX;
-                        let targetY = Math.abs(deltaX) * -0.05; 
+                        // YOUR ORIGINAL TRANSLATION
+                        card.style.transform = `translate(${deltaX}px, 0) rotate(${deltaX * 0.03}deg)`;
                         
                         const swipeThreshold = 50;
+                        const rawProgress = Math.min(1, Math.abs(deltaX) / 150);
                         
                         if (deltaX < -swipeThreshold) { 
-                            card.classList.add('dragging-nope'); card.classList.remove('dragging-like'); 
-                            
-                            // Magnetic Pull towards Reject Button
-                            if (rejectBtnRect && stackRect) {
-                                const btnX = (rejectBtnRect.left + rejectBtnRect.width/2) - (stackRect.left + stackRect.width/2);
-                                const btnY = (rejectBtnRect.top + rejectBtnRect.height/2) - (stackRect.top + stackRect.height/2);
-                                targetX = deltaX + (btnX - deltaX) * suckEase;
-                                targetY = targetY + (btnY - targetY) * suckEase;
-                            }
-                            
-                            if(nopeHint) { nopeHint.style.transform = `scale(${0.5 + rawProgress * 0.7})`; nopeHint.style.opacity = rawProgress * 1.5; }
+                            card.classList.add('swiping-left'); card.classList.remove('swiping-right'); 
+                            const glowProgress = Math.min(1, (Math.abs(deltaX) - swipeThreshold) / 100);
+                            if(nopeHint) { nopeHint.style.transform = `scale(${0.5 + glowProgress * 0.7})`; nopeHint.style.opacity = glowProgress * 1.5; }
                             if(rejectBtn) { rejectBtn.classList.add('highlight'); }
                             if(acceptBtn) { acceptBtn.classList.remove('highlight'); }
-                            
                         } else if (deltaX > swipeThreshold) { 
-                            card.classList.add('dragging-like'); card.classList.remove('dragging-nope'); 
-                            
-                            // Magnetic Pull towards Accept Button
-                            if (acceptBtnRect && stackRect) {
-                                const btnX = (acceptBtnRect.left + acceptBtnRect.width/2) - (stackRect.left + stackRect.width/2);
-                                const btnY = (acceptBtnRect.top + acceptBtnRect.height/2) - (stackRect.top + stackRect.height/2);
-                                targetX = deltaX + (btnX - deltaX) * suckEase;
-                                targetY = targetY + (btnY - targetY) * suckEase;
-                            }
-                            
-                            if(likeHint) { likeHint.style.transform = `scale(${0.5 + rawProgress * 0.7})`; likeHint.style.opacity = rawProgress * 1.5; }
+                            card.classList.add('swiping-right'); card.classList.remove('swiping-left'); 
+                            const glowProgress = Math.min(1, (deltaX - swipeThreshold) / 100);
+                            if(likeHint) { likeHint.style.transform = `scale(${0.5 + glowProgress * 0.7})`; likeHint.style.opacity = glowProgress * 1.5; }
                             if(acceptBtn) { acceptBtn.classList.add('highlight'); }
                             if(rejectBtn) { rejectBtn.classList.remove('highlight'); }
-                            
                         } else { 
-                            card.classList.remove('dragging-nope', 'dragging-like'); 
+                            card.classList.remove('swiping-left', 'swiping-right'); 
                             if(nopeHint) nopeHint.style.opacity = 0;
                             if(likeHint) likeHint.style.opacity = 0;
                             if(rejectBtn) rejectBtn.classList.remove('highlight');
                             if(acceptBtn) acceptBtn.classList.remove('highlight');
                         }
-                        
-                        card.style.transformOrigin = 'center center';
-                        card.style.transform = `translate(${targetX}px, ${targetY}px) scale(${scale}) rotate(${rot}deg)`;
-                        
                         ticking = false;
                     }); ticking = true;
                 }
@@ -670,31 +766,25 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                 document.removeEventListener('mousemove', doDrag); document.removeEventListener('mouseup', stopDrag); document.removeEventListener('touchmove', doDrag); document.removeEventListener('touchend', stopDrag);
                 
                 const deltaX = currentX - startX;
-                card.classList.remove('dragging-nope', 'dragging-like');
+                card.classList.remove('dragging'); 
+                
+                card.classList.remove('swiping-left', 'swiping-right');
                 if(nopeHint) { nopeHint.style.opacity = 0; nopeHint.style.transform = 'scale(0.5)'; }
                 if(likeHint) { likeHint.style.opacity = 0; likeHint.style.transform = 'scale(0.5)'; }
                 if(rejectBtn) rejectBtn.classList.remove('highlight');
                 if(acceptBtn) acceptBtn.classList.remove('highlight');
 
-                if (Math.abs(deltaX) > 130) { 
+                if (Math.abs(deltaX) > 100) { 
                     card.classList.remove('top-card'); 
                     animateSwipe(card, deltaX > 0 ? 'right' : 'left'); 
                 } else { 
-                    card.style.transition = 'transform 0.4s cubic-bezier(0.2, 1, 0.3, 1)'; 
                     card.style.transform = ''; 
-                    setTimeout(() => { card.style.transition = ''; }, 400);
                 }
             };
 
             const startDrag = (e) => {
                 if (e.target.closest('.volume-control') || e.target.closest('.fullscreen-btn') || e.target.closest('.play-pause-btn') || e.target.closest('.progress-container') || e.target.closest('.clip-info')) return;
                 if (isSwiping) return; 
-                
-                // Cache Button Rects for real-time physics calculations
-                if(rejectBtn) rejectBtnRect = rejectBtn.getBoundingClientRect();
-                if(acceptBtn) acceptBtnRect = acceptBtn.getBoundingClientRect();
-                if(stack) stackRect = stack.getBoundingClientRect();
-                
                 isDragging = true; card.classList.add('dragging'); startX = (e.type.includes('mouse') ? e : e.touches[0]).clientX; currentX = startX;
                 stopVideoPlay(card);
                 document.addEventListener('mousemove', doDrag); document.addEventListener('mouseup', stopDrag); document.addEventListener('touchmove', doDrag, {passive: false}); document.addEventListener('touchend', stopDrag);
@@ -706,59 +796,25 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             if (isSwiping) return; isSwiping = true;
             try { const v = card.querySelector('.video-player'); if(v){ v.pause(); v.removeAttribute('src'); v.load(); } } catch(e){}
             
-            card.classList.remove('dragging');
-            void card.offsetWidth; // Force CSS Reflow to ensure transition runs
-            
-            const btnSelector = direction === 'right' ? '.btn-accept' : '.btn-reject';
-            const targetBtn = document.querySelector(btnSelector);
-            const stack = document.getElementById('card-stack');
-
-            let targetX = direction === 'right' ? window.innerWidth : -window.innerWidth;
-            let targetY = 0;
-
-            // Final Apple Genie snap into the actual button center
-            if (targetBtn && stack) {
-                const btnRect = targetBtn.getBoundingClientRect();
-                const stackRect = stack.getBoundingClientRect();
-                targetX = (btnRect.left + btnRect.width/2) - (stackRect.left + stackRect.width/2);
-                targetY = (btnRect.top + btnRect.height/2) - (stackRect.top + stackRect.height/2);
-            }
-            
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    // Fast Spring Transition
-                    card.style.transition = 'transform 0.35s cubic-bezier(0.4, -0.3, 0.1, 1.2), opacity 0.3s ease-out';
-                    card.style.transformOrigin = 'center center';
-                    card.style.transform = `translate(${targetX}px, ${targetY}px) scale(0) rotate(${direction === 'right' ? 180 : -180}deg)`;
-                    card.style.opacity = '0';
-                });
-            });
+            // YOUR ORIGINAL ANIMATION
+            card.style.transition = 'transform 0.3s ease-out, opacity 0.3s';
+            card.style.transform = `translate(${direction === 'right' ? window.innerWidth : -window.innerWidth}px, -100px) rotate(${direction === 'right' ? 30 : -30}deg)`;
+            card.style.opacity = '0';
             
             closeComments(); 
-            setTimeout(() => { handleSwipe(card.dataset.clipId, direction); currentIndex++; renderCardStack(); isSwiping = false; }, 360);
+            setTimeout(() => { handleSwipe(card.dataset.clipId, direction); currentIndex++; renderCardStack(); isSwiping = false; }, 300);
         }
 
-        // Button clicks trigger the exact same suck animation
         function triggerSwipeAnimation(direction) {
             const card = document.querySelector('.clip-card.top-card');
             if (card && !isDragging && !isSwiping) {
-                // 1. Cache button positions FIRST
                 const rejectBtn = document.querySelector('.btn-reject');
                 const acceptBtn = document.querySelector('.btn-accept');
-                const stack = document.getElementById('card-stack');
-                
-                if(rejectBtn) rejectBtnRect = rejectBtn.getBoundingClientRect();
-                if(acceptBtn) acceptBtnRect = acceptBtn.getBoundingClientRect();
-                if(stack) stackRect = stack.getBoundingClientRect();
-                
-                // 2. Highlight the target button
                 const targetBtn = direction === 'left' ? rejectBtn : acceptBtn;
                 if (targetBtn) {
                     targetBtn.classList.add('highlight');
                     setTimeout(() => targetBtn.classList.remove('highlight'), 400);
                 }
-                
-                // 3. Trigger the same genie animation
                 card.classList.remove('top-card');
                 animateSwipe(card, direction);
             }
@@ -944,18 +1000,24 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 
 @app.route('/')
 def index():
-    return HTML_TEMPLATE
+    # Provide a default list of categories in case they aren't loaded in core.py yet
+    categories = getattr(config, 'twitch_categories', ['Just Chatting', 'League of Legends', 'VALORANT'])
+    return render_template_string(HTML_TEMPLATE, config=config, categories=categories)
 
 @app.route('/api/clips')
 def get_clips():
-    if not clips_queue:
-        fetch_clips()
+    category = request.args.get('category', 'My Streamers')
+    
+    if category not in category_queues or not category_queues[category]:
+        category_queues[category] = fetch_clips_for_category(category)
         
-    for clip in clips_queue:
+    queue = category_queues[category]
+    
+    for clip in queue:
         clip['local_likes'] = clip_scores.get(clip['id'], 0)
         clip['comment_count'] = len(clip_comments.get(clip['id'], []))
         
-    return jsonify({'clips': clips_queue, 'total': len(clips_queue)})
+    return jsonify({'clips': queue, 'total': len(queue)})
 
 @app.route('/api/clip/<clip_id>/video-url')
 def get_clip_video_url(clip_id):
@@ -973,14 +1035,16 @@ def get_clip_video_url(clip_id):
 
 @app.route('/api/clip/<clip_id>/action', methods=['POST'])
 def clip_action(clip_id):
-    global clips_queue, clip_scores
+    global category_queues, clip_scores
     data = request.json
     action = data.get('action')
     
     if action == 'like':
         clip_scores[clip_id] = clip_scores.get(clip_id, 0) + 1
         
-    clips_queue = [c for c in clips_queue if c['id'] != clip_id]
+    for cat in category_queues:
+        category_queues[cat] = [c for c in category_queues[cat] if c['id'] != clip_id]
+        
     return jsonify({'status': 'voted', 'current_score': clip_scores.get(clip_id, 0)})
 
 @app.route('/api/clip/<clip_id>/comments', methods=['GET', 'POST'])
@@ -1090,7 +1154,8 @@ if __name__ == '__main__':
     print("🔥 Clipder Pro - Full Master Edition")
     print("="*60)
     print(f"Status: {bot_initialized}")
-    print("✅ Apple 'Genie' Suck Physics Implemented")
+    print("✅ Original Animations Retained Exactly As Requested")
+    print("✅ Anti-Freeze Category Tab Switching Implemented")
     print("Open: http://localhost:5000")
     print("="*60 + "\n")
     app.run(debug=True, host='0.0.0.0', port=5000)
