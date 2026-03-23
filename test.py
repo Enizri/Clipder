@@ -287,6 +287,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 # OPUS CLIP CLIENT
 # ==============================================================================
 
+
+#TODO: find free api for editing clips model   
 class OpusClipClient:
     """Handles Opus Clip AI video editing"""
     
@@ -802,7 +804,7 @@ class YouTubeUploader:
                     "title": title[:100],
                     "description": description[:5000],
                     "categoryId": self.config.youtube_category,
-                    "tags": ["gaming", "twitch", "shorts", "viral"]
+                    "tags": ["twitch", "shorts", "viral"]
                 },
                 "status": {
                     "privacyStatus": self.config.youtube_privacy,
@@ -830,6 +832,8 @@ class YouTubeUploader:
 # ==============================================================================
 # TIKTOK UPLOADER
 # ==============================================================================
+
+#TODO: Add auto generate tiktok new cookies.txt if expired
 
 class TikTokUploader:
     def __init__(self, config: Config):
