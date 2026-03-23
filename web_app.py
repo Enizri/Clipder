@@ -36,51 +36,29 @@ admin_upload_queue = {}
 def fetch_clips():
     global clips_queue, clip_metadata_store
     clips_queue = []
-    
-    if not bot_initialized:
-        return 0
-    
+    if not bot_initialized: return 0
     clips_by_channel = {}
-    
     for channel in config.twitch_channels:
         broadcaster_id = twitch_client.get_broadcaster_id(channel)
         if broadcaster_id:
             all_clips = twitch_client.get_recent_clips(broadcaster_id, hours_back=72, fetch_count=100)
-            
             channel_clips = []
             for clip in all_clips:
-                clip_data = {
-                    'id': clip['id'],
-                    'title': clip['title'],
-                    'url': clip['url'],
-                    'thumbnail_url': clip['thumbnail_url'],
-                    'view_count': clip['view_count'],
-                    'creator_name': clip['creator_name'],
-                    'duration': clip['duration'],
-                    'created_at': clip['created_at'],
-                    'channel': channel
-                }
-                
+                clip_data = {'id': clip['id'], 'title': clip['title'], 'url': clip['url'], 'thumbnail_url': clip['thumbnail_url'], 'view_count': clip['view_count'], 'creator_name': clip['creator_name'], 'duration': clip['duration'], 'created_at': clip['created_at'], 'channel': channel}
                 clip_metadata_store[clip['id']] = clip_data
-                
                 if not state_manager.is_processed(clip["id"]) and clip["id"] not in admin_upload_queue and clip["id"] not in clip_scores:
                     channel_clips.append(clip_data)
-            
             channel_clips.sort(key=lambda x: x['view_count'], reverse=True)
             clips_by_channel[channel] = channel_clips
-    
     max_per_channel = 10
     final_queue = []
     channel_queues = {ch: clips[:max_per_channel] for ch, clips in clips_by_channel.items()}
-    
     while any(channel_queues.values()):
         for channel in config.twitch_channels:
             if channel in channel_queues and channel_queues[channel]:
                 final_queue.append(channel_queues[channel].pop(0))
-                
     clips_queue = final_queue
     return len(clips_queue)
-
 
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
@@ -92,7 +70,6 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Fredoka+One&display=swap');
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        
         body { font-family: 'Inter', sans-serif; background: #0a0a0a; min-height: 100vh; color: #ffffff; position: relative; overflow-x: hidden; }
         
         body::before {
@@ -131,9 +108,11 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         .clip-card { 
             position: absolute; width: 100%; height: 100%; background: #141414; border-radius: 16px; 
             box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.05); 
-            cursor: grab; transform-origin: 50% 90%; transition: transform 0.3s ease-out, opacity 0.3s ease-out; user-select: none; 
+            cursor: grab; transform-origin: center center; user-select: none; 
+            will-change: transform, opacity;
+            transition: transform 0.3s cubic-bezier(0.2, 1, 0.3, 1), opacity 0.3s ease-out;
         }
-        .clip-card.dragging { cursor: grabbing; transition: none !important; }
+        .clip-card.dragging { transition: none !important; cursor: grabbing; }
         
         .clip-preview { position: relative; width: 100%; aspect-ratio: 9/16; background: #000; border-radius: 16px 16px 0 0; overflow: hidden; transform-origin: bottom center; transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), border-radius 0.3s; z-index: 2; }
         .clip-preview:hover { transform: scale(1.02) translateY(-4px); border-radius: 16px; box-shadow: 0 20px 50px rgba(0,0,0,0.8), 0 0 0 1px rgba(139, 92, 246, 0.4); z-index: 10; }
@@ -148,8 +127,9 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         .video-loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 36px; height: 36px; border: 2px solid rgba(255, 255, 255, 0.1); border-top-color: #8b5cf6; border-radius: 50%; animation: spin 0.7s linear infinite; z-index: 5; opacity: 0; transition: opacity 0.3s; }
         .video-loading.active { opacity: 1; }
         
-        .fullscreen-btn { position: absolute; top: 15px; right: 15px; width: 36px; height: 36px; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; color: white; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0; transition: all 0.2s; z-index: 10; }
-        .play-pause-btn { position: absolute; top: 15px; right: 60px; width: 36px; height: 36px; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; color: white; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0; transition: all 0.2s; z-index: 10; }
+        .fullscreen-btn, .play-pause-btn { position: absolute; top: 15px; width: 36px; height: 36px; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; color: white; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0; transition: all 0.2s; z-index: 10; }
+        .fullscreen-btn { right: 15px; }
+        .play-pause-btn { right: 60px; }
         
         .clip-preview:hover .fullscreen-btn, .clip-preview:hover .play-pause-btn { opacity: 1; }
         .fullscreen-btn:hover, .play-pause-btn:hover { background: rgba(236, 72, 153, 0.8); border-color: transparent; transform: scale(1.05); }
@@ -189,10 +169,15 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             pointer-events: auto; width: 85px; height: 85px; border-radius: 50%; border: 2px solid; 
             cursor: pointer; display: flex; align-items: center; justify-content: center; 
             background: rgba(20, 20, 20, 0.7); backdrop-filter: blur(12px); box-shadow: 0 15px 35px rgba(0,0,0,0.5); 
-            transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+            transition: transform 0.1s ease-out, box-shadow 0.1s ease-out, border-color 0.1s ease-out;
         }
         .btn-reject { border-color: rgba(239, 68, 68, 0.4); color: #ef4444; }
         .btn-accept { border-color: rgba(16, 185, 129, 0.4); color: #10b981; }
+        
+        /* Highlight states driven by JS Physics */
+        .btn-reject.highlight { transform: scale(1.2) translateX(-10px) rotate(-15deg); background: rgba(239, 68, 68, 0.2); box-shadow: 0 0 50px rgba(239, 68, 68, 0.6); border-color: #ef4444; }
+        .btn-accept.highlight { transform: scale(1.2) translateX(10px) rotate(15deg); background: rgba(16, 185, 129, 0.2); box-shadow: 0 0 50px rgba(16, 185, 129, 0.6); border-color: #10b981; }
+        
         .btn-reject:hover { transform: scale(1.15) translateX(-8px) rotate(-15deg); background: rgba(239, 68, 68, 0.15); box-shadow: 0 0 30px rgba(239, 68, 68, 0.3); border-color: #ef4444; }
         .btn-accept:hover { transform: scale(1.15) translateX(8px) rotate(15deg); background: rgba(16, 185, 129, 0.15); box-shadow: 0 0 30px rgba(16, 185, 129, 0.3); border-color: #10b981; }
 
@@ -275,7 +260,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         
         .admin-footer { width: 100%; max-width: 1000px; margin-bottom: 20px; padding: 20px; background: rgba(20,20,20,0.9); border-radius: 16px; border: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; }
         
-        /* THEATER MODE */
+        /* --- THEATER MODE MODAL CSS --- */
         #theater-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 10000; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s ease; pointer-events: none; }
         #theater-modal.show { opacity: 1; pointer-events: auto; }
         .theater-backdrop { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(10, 10, 10, 0.65); backdrop-filter: blur(15px); }
@@ -284,7 +269,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         .theater-close { position: absolute; top: 20px; right: 20px; width: 44px; height: 44px; border-radius: 50%; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid rgba(255,255,255,0.2); font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10002; transition: all 0.2s; }
         .theater-close:hover { background: rgba(239, 68, 68, 0.8); transform: scale(1.1); border-color: transparent; }
 
-        /* COMMENTS SIDEBAR */
+        /* --- COMMENTS SIDEBAR CSS --- */
         #comments-sidebar { 
             position: fixed; top: 0; right: -400px; width: 100%; max-width: 400px; height: 100vh; 
             background: rgba(15, 15, 15, 0.98); backdrop-filter: blur(20px); border-left: 1px solid rgba(255,255,255,0.1); 
@@ -350,10 +335,10 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         <div id="swipe" class="view-section active">
             <div class="swipe-container">
                 <div class="action-buttons" id="action-btns">
-                    <button class="btn-side btn-reject" onclick="swipeLeft()" title="Skip">
+                    <button class="btn-side btn-reject" onclick="triggerSwipeAnimation('left')" title="Skip">
                         <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v.5"/></svg>
                     </button>
-                    <button class="btn-side btn-accept" onclick="swipeRight()" title="Like">
+                    <button class="btn-side btn-accept" onclick="triggerSwipeAnimation('right')" title="Like">
                         <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v.5"/></svg>
                     </button>
                 </div>
@@ -440,6 +425,8 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             'monkaW': 'https://cdn.7tv.app/emote/5e7b78a9c2981a0076a032ba/1x.webp'
         };
         
+        let stackRect, rejectBtnRect, acceptBtnRect;
+
         document.addEventListener('DOMContentLoaded', () => { loadClips(); refreshAdminQueue(); });
         
         function switchTab(tabId) {
@@ -599,36 +586,80 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             video.muted = slider.value == 0;
         }
 
-        // --- DYNAMIC SWIPE LOGIC ---
+        // --- DYNAMIC SWIPE LOGIC WITH THE "GENIE" SUCK ANIMATION ---
         function makeCardSwipeable(card) {
             if (card.dataset.swipeable === 'true') return; card.dataset.swipeable = 'true';
             let startX = 0, currentX = 0, ticking = false;
             
             const nopeHint = card.querySelector('#nope-hint');
             const likeHint = card.querySelector('#like-hint');
+            
+            const rejectBtn = document.querySelector('.btn-reject');
+            const acceptBtn = document.querySelector('.btn-accept');
+            const stack = document.getElementById('card-stack');
 
             const doDrag = (e) => {
                 if (!isDragging) return; e.preventDefault(); currentX = (e.type.includes('mouse') ? e : e.touches[0]).clientX;
                 if (!ticking) {
                     window.requestAnimationFrame(() => {
                         if (!isDragging) return; const deltaX = currentX - startX; 
-                        // Highly flexible physics with rotation
-                        card.style.transform = `translate(${deltaX}px, ${Math.abs(deltaX)*-0.05}px) rotate(${deltaX * 0.08}deg)`;
+                        
+                        // Calculate Magnetic Sucking Physics
+                        const dragDistance = Math.abs(deltaX);
+                        const maxDrag = window.innerWidth / 3.5; 
+                        const rawProgress = Math.min(1, dragDistance / maxDrag);
+                        
+                        // Exponential easing for the suck effect
+                        const suckEase = Math.pow(rawProgress, 3); 
+                        const scale = 1 - (suckEase * 0.9); // Shrinks to 10%
+                        const rot = deltaX * 0.05; 
+                        
+                        let targetX = deltaX;
+                        let targetY = Math.abs(deltaX) * -0.05; 
                         
                         const swipeThreshold = 50;
+                        
                         if (deltaX < -swipeThreshold) { 
                             card.classList.add('dragging-nope'); card.classList.remove('dragging-like'); 
-                            const progress = Math.min(1, (Math.abs(deltaX) - swipeThreshold) / 100);
-                            if(nopeHint) { nopeHint.style.transform = `scale(${0.5 + progress * 0.5})`; nopeHint.style.opacity = progress; }
+                            
+                            // Magnetic Pull towards Reject Button
+                            if (rejectBtnRect && stackRect) {
+                                const btnX = (rejectBtnRect.left + rejectBtnRect.width/2) - (stackRect.left + stackRect.width/2);
+                                const btnY = (rejectBtnRect.top + rejectBtnRect.height/2) - (stackRect.top + stackRect.height/2);
+                                targetX = deltaX + (btnX - deltaX) * suckEase;
+                                targetY = targetY + (btnY - targetY) * suckEase;
+                            }
+                            
+                            if(nopeHint) { nopeHint.style.transform = `scale(${0.5 + rawProgress * 0.7})`; nopeHint.style.opacity = rawProgress * 1.5; }
+                            if(rejectBtn) { rejectBtn.classList.add('highlight'); }
+                            if(acceptBtn) { acceptBtn.classList.remove('highlight'); }
+                            
                         } else if (deltaX > swipeThreshold) { 
                             card.classList.add('dragging-like'); card.classList.remove('dragging-nope'); 
-                            const progress = Math.min(1, (deltaX - swipeThreshold) / 100);
-                            if(likeHint) { likeHint.style.transform = `scale(${0.5 + progress * 0.5})`; likeHint.style.opacity = progress; }
+                            
+                            // Magnetic Pull towards Accept Button
+                            if (acceptBtnRect && stackRect) {
+                                const btnX = (acceptBtnRect.left + acceptBtnRect.width/2) - (stackRect.left + stackRect.width/2);
+                                const btnY = (acceptBtnRect.top + acceptBtnRect.height/2) - (stackRect.top + stackRect.height/2);
+                                targetX = deltaX + (btnX - deltaX) * suckEase;
+                                targetY = targetY + (btnY - targetY) * suckEase;
+                            }
+                            
+                            if(likeHint) { likeHint.style.transform = `scale(${0.5 + rawProgress * 0.7})`; likeHint.style.opacity = rawProgress * 1.5; }
+                            if(acceptBtn) { acceptBtn.classList.add('highlight'); }
+                            if(rejectBtn) { rejectBtn.classList.remove('highlight'); }
+                            
                         } else { 
                             card.classList.remove('dragging-nope', 'dragging-like'); 
                             if(nopeHint) nopeHint.style.opacity = 0;
                             if(likeHint) likeHint.style.opacity = 0;
+                            if(rejectBtn) rejectBtn.classList.remove('highlight');
+                            if(acceptBtn) acceptBtn.classList.remove('highlight');
                         }
+                        
+                        card.style.transformOrigin = 'center center';
+                        card.style.transform = `translate(${targetX}px, ${targetY}px) scale(${scale}) rotate(${rot}deg)`;
+                        
                         ticking = false;
                     }); ticking = true;
                 }
@@ -637,19 +668,33 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             const stopDrag = () => {
                 if (!isDragging) return; isDragging = false;
                 document.removeEventListener('mousemove', doDrag); document.removeEventListener('mouseup', stopDrag); document.removeEventListener('touchmove', doDrag); document.removeEventListener('touchend', stopDrag);
-                card.classList.remove('dragging'); const deltaX = currentX - startX;
                 
+                const deltaX = currentX - startX;
                 card.classList.remove('dragging-nope', 'dragging-like');
-                if(nopeHint) nopeHint.style.opacity = 0;
-                if(likeHint) likeHint.style.opacity = 0;
+                if(nopeHint) { nopeHint.style.opacity = 0; nopeHint.style.transform = 'scale(0.5)'; }
+                if(likeHint) { likeHint.style.opacity = 0; likeHint.style.transform = 'scale(0.5)'; }
+                if(rejectBtn) rejectBtn.classList.remove('highlight');
+                if(acceptBtn) acceptBtn.classList.remove('highlight');
 
-                if (Math.abs(deltaX) > 130) { card.classList.remove('top-card'); animateSwipe(card, deltaX > 0 ? 'right' : 'left'); } 
-                else { card.style.transform = ''; }
+                if (Math.abs(deltaX) > 130) { 
+                    card.classList.remove('top-card'); 
+                    animateSwipe(card, deltaX > 0 ? 'right' : 'left'); 
+                } else { 
+                    card.style.transition = 'transform 0.4s cubic-bezier(0.2, 1, 0.3, 1)'; 
+                    card.style.transform = ''; 
+                    setTimeout(() => { card.style.transition = ''; }, 400);
+                }
             };
 
             const startDrag = (e) => {
                 if (e.target.closest('.volume-control') || e.target.closest('.fullscreen-btn') || e.target.closest('.play-pause-btn') || e.target.closest('.progress-container') || e.target.closest('.clip-info')) return;
                 if (isSwiping) return; 
+                
+                // Cache Button Rects for real-time physics calculations
+                if(rejectBtn) rejectBtnRect = rejectBtn.getBoundingClientRect();
+                if(acceptBtn) acceptBtnRect = acceptBtn.getBoundingClientRect();
+                if(stack) stackRect = stack.getBoundingClientRect();
+                
                 isDragging = true; card.classList.add('dragging'); startX = (e.type.includes('mouse') ? e : e.touches[0]).clientX; currentX = startX;
                 stopVideoPlay(card);
                 document.addEventListener('mousemove', doDrag); document.addEventListener('mouseup', stopDrag); document.addEventListener('touchmove', doDrag, {passive: false}); document.addEventListener('touchend', stopDrag);
@@ -660,16 +705,67 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         function animateSwipe(card, direction) {
             if (isSwiping) return; isSwiping = true;
             try { const v = card.querySelector('.video-player'); if(v){ v.pause(); v.removeAttribute('src'); v.load(); } } catch(e){}
-            card.style.transition = 'transform 0.4s cubic-bezier(0.6, -0.28, 0.735, 0.045), opacity 0.3s';
-            card.style.transform = `translate(${direction === 'right' ? window.innerWidth : -window.innerWidth}px, -100px) rotate(${direction === 'right' ? 30 : -30}deg)`;
-            card.style.opacity = '0';
+            
+            card.classList.remove('dragging');
+            void card.offsetWidth; // Force CSS Reflow to ensure transition runs
+            
+            const btnSelector = direction === 'right' ? '.btn-accept' : '.btn-reject';
+            const targetBtn = document.querySelector(btnSelector);
+            const stack = document.getElementById('card-stack');
+
+            let targetX = direction === 'right' ? window.innerWidth : -window.innerWidth;
+            let targetY = 0;
+
+            // Final Apple Genie snap into the actual button center
+            if (targetBtn && stack) {
+                const btnRect = targetBtn.getBoundingClientRect();
+                const stackRect = stack.getBoundingClientRect();
+                targetX = (btnRect.left + btnRect.width/2) - (stackRect.left + stackRect.width/2);
+                targetY = (btnRect.top + btnRect.height/2) - (stackRect.top + stackRect.height/2);
+            }
+            
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    // Fast Spring Transition
+                    card.style.transition = 'transform 0.35s cubic-bezier(0.4, -0.3, 0.1, 1.2), opacity 0.3s ease-out';
+                    card.style.transformOrigin = 'center center';
+                    card.style.transform = `translate(${targetX}px, ${targetY}px) scale(0) rotate(${direction === 'right' ? 180 : -180}deg)`;
+                    card.style.opacity = '0';
+                });
+            });
             
             closeComments(); 
-            setTimeout(() => { handleSwipe(card.dataset.clipId, direction); currentIndex++; renderCardStack(); isSwiping = false; }, 300);
+            setTimeout(() => { handleSwipe(card.dataset.clipId, direction); currentIndex++; renderCardStack(); isSwiping = false; }, 360);
         }
 
-        function swipeLeft() { const c = document.querySelector('.clip-card.top-card'); if (c && !isDragging && !isSwiping) { c.classList.remove('top-card'); animateSwipe(c, 'left'); } }
-        function swipeRight() { const c = document.querySelector('.clip-card.top-card'); if (c && !isDragging && !isSwiping) { c.classList.remove('top-card'); animateSwipe(c, 'right'); } }
+        // Button clicks trigger the exact same suck animation
+        function triggerSwipeAnimation(direction) {
+            const card = document.querySelector('.clip-card.top-card');
+            if (card && !isDragging && !isSwiping) {
+                // 1. Cache button positions FIRST
+                const rejectBtn = document.querySelector('.btn-reject');
+                const acceptBtn = document.querySelector('.btn-accept');
+                const stack = document.getElementById('card-stack');
+                
+                if(rejectBtn) rejectBtnRect = rejectBtn.getBoundingClientRect();
+                if(acceptBtn) acceptBtnRect = acceptBtn.getBoundingClientRect();
+                if(stack) stackRect = stack.getBoundingClientRect();
+                
+                // 2. Highlight the target button
+                const targetBtn = direction === 'left' ? rejectBtn : acceptBtn;
+                if (targetBtn) {
+                    targetBtn.classList.add('highlight');
+                    setTimeout(() => targetBtn.classList.remove('highlight'), 400);
+                }
+                
+                // 3. Trigger the same genie animation
+                card.classList.remove('top-card');
+                animateSwipe(card, direction);
+            }
+        }
+        
+        function swipeLeft() { triggerSwipeAnimation('left'); }
+        function swipeRight() { triggerSwipeAnimation('right'); }
         
         async function handleSwipe(clipId, direction) {
             await fetch(`/api/clip/${clipId}/action`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: direction === 'right' ? 'like' : 'dislike'}) });
@@ -994,9 +1090,7 @@ if __name__ == '__main__':
     print("🔥 Clipder Pro - Full Master Edition")
     print("="*60)
     print(f"Status: {bot_initialized}")
-    print("✅ Wide 460px Cards + Custom SVG Side Buttons")
-    print("✅ Dynamic Drag Physics & Bubbly Text Glow Auras")
-    print("✅ Everything Integrated: Theater Mode, Comments, Leaderboard")
+    print("✅ Apple 'Genie' Suck Physics Implemented")
     print("Open: http://localhost:5000")
     print("="*60 + "\n")
     app.run(debug=True, host='0.0.0.0', port=5000)
