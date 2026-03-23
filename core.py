@@ -870,40 +870,91 @@ class TikTokUploader:
 # ==============================================================================
 # STATE MANAGER
 # ==============================================================================
+# ==============================================================================
+# STATE MANAGER (UPGRADED FOR COMMUNITY VOTING)
+# ==============================================================================
 
 class StateManager:
     def __init__(self, config: Config):
         self.config = config
-        self._processed: Set[str] = set()
+        self.db_file = config.base_dir / "clipder_db.json"
+        self._db = {"clips": {}}
         self._load()
     
     def _load(self):
-        """Load processed clip IDs from disk"""
+        """Load the database and migrate old data if needed"""
+        # Load the new DB format if it exists
+        if self.db_file.exists():
+            try:
+                with open(self.db_file, "r", encoding="utf-8") as f:
+                    self._db = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load DB: {e}")
+        
+        # Backwards compatibility: Migrate old uploaded_clips.json
         if self.config.uploaded_json.exists():
             try:
                 with open(self.config.uploaded_json, "r") as f:
-                    self._processed = set(json.load(f))
-                logger.info(f"📚 Loaded {len(self._processed)} processed clips from history")
+                    old_processed = json.load(f)
+                    for cid in old_processed:
+                        if cid not in self._db["clips"]:
+                            self._db["clips"][cid] = {
+                                "id": cid,
+                                "status": "uploaded",
+                                "score": 0
+                            }
+                self._save()
             except Exception as e:
-                logger.error(f"Failed to load history: {e}")
-                self._processed = set()
-        else:
-            logger.info("📚 No history file found - starting fresh")
-            self._processed = set()
+                pass
     
     def _save(self):
+        """Save the current state to disk"""
         try:
-            with open(self.config.uploaded_json, "w") as f:
-                json.dump(list(self._processed), f, indent=2)
+            with open(self.db_file, "w", encoding="utf-8") as f:
+                json.dump(self._db, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
+
+    def add_clip(self, clip_data: Dict):
+        """Add a new clip to the database if it doesn't exist"""
+        clip_id = clip_data["id"]
+        if clip_id not in self._db["clips"]:
+            # Inject new tracking fields
+            clip_data["score"] = 0
+            clip_data["status"] = "pending" # Can be: pending, uploaded, rejected
+            self._db["clips"][clip_id] = clip_data
+            self._save()
+
+    def vote(self, clip_id: str, amount: int):
+        """Add +1 (Like) or -1 (Dislike) to a clip's score"""
+        if clip_id in self._db["clips"]:
+            self._db["clips"][clip_id]["score"] += amount
+            self._save()
+
+    def set_status(self, clip_id: str, status: str):
+        """Mark a clip as uploaded or rejected"""
+        if clip_id in self._db["clips"]:
+            self._db["clips"][clip_id]["status"] = status
+            self._save()
+
+    def get_pending_clips(self) -> List[Dict]:
+        """Get clips that haven't been uploaded or rejected yet"""
+        return [c for c in self._db["clips"].values() if c.get("status") == "pending"]
     
+    def get_top_clips(self, limit: int = 50) -> List[Dict]:
+        """Get the highest scored clips for the leaderboard"""
+        # Include both pending and uploaded clips in the leaderboard
+        clips = [c for c in self._db["clips"].values() if c.get("status") in ["pending", "uploaded"]]
+        clips.sort(key=lambda x: x.get("score", 0), reverse=True)
+        return clips[:limit]
+
+    # --- Backwards compatibility for the FFmpeg background worker ---
     def is_processed(self, clip_id: str) -> bool:
-        return clip_id in self._processed
+        clip = self._db["clips"].get(clip_id, {})
+        return clip.get("status") in ["uploaded", "rejected"]
     
     def mark_processed(self, clip_id: str):
-        self._processed.add(clip_id)
-        self._save()
+        self.set_status(clip_id, "uploaded")
 
 # ==============================================================================
 # MAIN BOT
