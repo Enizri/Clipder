@@ -1,5 +1,51 @@
+# Dependencies
 node_modules/
+package-lock.json
+package-lock/
+
+# Build outputs
 dist/
+build/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Environment
 .env
+.env.local
+
+# Logs
+*.log
+logs/
+
+# Credentials & Tokens
+*.pickle
+token.pickle
+cookies*.txt
+credential*.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.temp
+nul
+~*
