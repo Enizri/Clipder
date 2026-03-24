@@ -15,4 +15,8 @@ dependencies = [
     "requests>=2.32.5",
     "tiktok-uploader>=1.2.0",
     "yt-dlp>=2026.3.17",
+    "fastapi>=0.135.2",
+    "uvicorn>=0.42.0",
+    "pydantic>=2.12.5",
+    "httpx>=0.28.1",
 ]

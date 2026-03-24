@@ -1,8 +1,5 @@
-.env
-.python-version
-clip_bot.log
-tiktok.com_cookies.txt
-token.pickle
+node_modules/
+dist/
 __pycache__/
-.venv
-ideas.md
+*.pyc
+.env
