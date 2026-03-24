@@ -19,10 +19,12 @@ env/
 *.egg-info/
 dist/
 build/
+.ruff_cache/
 
 # Environment
 .env
 .env.local
+.env.*.local
 
 # Logs
 *.log
@@ -33,6 +35,12 @@ logs/
 token.pickle
 cookies*.txt
 credential*.json
+client_secrets.json
+
+# Data files (keep .env.example)
+*.json
+!pyproject.toml
+!.env.example
 
 # IDE
 .idea/
@@ -49,3 +57,6 @@ Thumbs.db
 *.temp
 nul
 ~*
+
+# Python version
+.python-version
