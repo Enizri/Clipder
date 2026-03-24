@@ -297,6 +297,34 @@ Use consistent section dividers in large files:
 
 ---
 
+## Security (CRITICAL)
+
+- **NEVER read, display, or expose `.env` files** - They contain sensitive API keys and credentials
+- **ONLY read `.env.example`** to understand required environment variables
+- If asked to work with credentials, use placeholder values and instruct user to add their own
+- If credentials are accidentally exposed in conversation, warn the user to rotate them immediately
+
+### Accessing Environment Variables in Code
+
+When you need to access environment variables in Python code (for API calls, configs, etc.), use `os.environ` or `python-dotenv`. **Never hardcode credentials** - always load them from environment:
+
+```python
+import os
+from dotenv import load_dotenv
+
+# Load .env file (this only reads, never exposes to user)
+load_dotenv()
+
+# Access credentials safely - they go directly to the API/library, never exposed in output
+TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID")
+TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+```
+
+The application should already have `python-dotenv` in its dependencies via `core.py` - use `Config.from_env()` which handles this automatically.
+
+---
+
 ## Environment Variables
 
 | Variable | Required | Description |
