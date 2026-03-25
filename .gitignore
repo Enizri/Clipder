@@ -32,6 +32,7 @@ sessionsHist
 # Logs
 *.log
 logs/
+clip_bot.log
 
 # Credentials & Tokens
 *.pickle
@@ -54,6 +55,7 @@ client_secrets.json
 # OS
 .DS_Store
 Thumbs.db
+.start.bat
 
 # Temp files
 *.tmp

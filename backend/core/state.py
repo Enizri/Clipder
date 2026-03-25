@@ -1,10 +1,42 @@
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Set
 import asyncio
 import logging
+from fastapi import WebSocket
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+
+class ConnectionManager:
+    _instance: Optional["ConnectionManager"] = None
+
+    def __init__(self):
+        self.active_connections: Set[WebSocket] = set()
+
+    @classmethod
+    def get_instance(cls) -> "ConnectionManager":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.add(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.discard(websocket)
+
+    async def broadcast(self, message: dict):
+        disconnected = set()
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                disconnected.add(connection)
+        for conn in disconnected:
+            self.active_connections.discard(conn)
+
 
 from core import (
     Config,
@@ -31,6 +63,8 @@ class AppState:
         self.video_processor: VideoProcessor = VideoProcessor(self.config)
         self.youtube: YouTubeUploader = YouTubeUploader(self.config)
         self.tiktok: TikTokUploader = TikTokUploader(self.config)
+
+        self.ws_manager: ConnectionManager = ConnectionManager.get_instance()
 
         self.category_queues: Dict[str, List[Dict[str, Any]]] = {}
         self.clip_metadata_store: Dict[str, Dict[str, Any]] = {}
@@ -167,16 +201,35 @@ class AppState:
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(clip["url"], download=False)
-                return {
-                    "video_url": info.get("url"),
-                    "title": clip["title"],
-                }
+
+                video_url = info.get("url") if info else None
+
+                if not video_url and info:
+                    entries = info.get("entries")
+                    if entries:
+                        for entry in entries:
+                            if entry and "url" in entry:
+                                video_url = entry["url"]
+                                break
+
+                if video_url:
+                    return {
+                        "video_url": video_url,
+                        "title": clip["title"],
+                    }
+
+                return {"error": "No video URL found"}
         except Exception as e:
             return {"error": str(e)}
 
     async def action_clip(self, clip_id: str, action: str) -> Dict[str, Any]:
         if action == "like":
             self.clip_scores[clip_id] = self.clip_scores.get(clip_id, 0) + 1
+
+            leaderboard = await self.get_leaderboard()
+            await self.ws_manager.broadcast(
+                {"type": "leaderboard_update", "data": leaderboard[:10]}
+            )
 
         for cat in self.category_queues:
             self.category_queues[cat] = [

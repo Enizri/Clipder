@@ -81,3 +81,41 @@ export interface GifItem {
 export interface GifResponse {
   gifs: GifItem[];
 }
+
+// Auth types
+export interface User {
+  id: number;
+  username: string;
+  email: string;
+  role: string;
+  twitch_id: string | null;
+  twitch_username: string | null;
+}
+
+export interface AuthResponse {
+  access_token: string;
+  token_type: string;
+  user: User;
+}
+
+export interface TwitchLoginResponse {
+  authorization_url: string;
+}
+
+export interface Streamer {
+  id: number;
+  streamer_name: string;
+  streamer_id: string;
+}
+
+export interface TwitchFollow {
+  to_id: string;
+  to_name: string;
+}
+
+export interface SearchChannel {
+  id: string;
+  name: string;
+  game_name: string;
+  is_live: boolean;
+}

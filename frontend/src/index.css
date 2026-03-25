@@ -300,3 +300,90 @@ header h1 { font-size: 1.6em; font-weight: 900; color: #ffffff; letter-spacing: 
 #loading { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(10, 10, 10, 0.98); backdrop-filter: blur(10px); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9999; }
 @keyframes spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
 .empty-msg { text-align: center; color: #666; font-size: 1.2em; margin-top: 60px; font-weight: 600; }
+
+/* Auth Section */
+.auth-section { display: flex; align-items: center; gap: 12px; }
+.auth-btn { background: linear-gradient(135deg, #8b5cf6, #ec4899); color: #fff; border: none; padding: 8px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.auth-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 15px rgba(139, 92, 246, 0.4); }
+.user-menu { display: flex; align-items: center; gap: 12px; color: #fff; font-weight: 500; }
+.user-menu button { background: rgba(255,255,255,0.1); border: none; color: #aaa; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85em; }
+.user-menu button:hover { background: rgba(255,255,255,0.15); color: #fff; }
+.twitch-badge { background: #9146ff; padding: 4px 10px; border-radius: 4px; font-size: 0.8em; font-weight: 600; }
+
+/* Auth Modal */
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); z-index: 10000; display: flex; align-items: center; justify-content: center; }
+.auth-modal { background: #1a1a1f; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 32px; width: 100%; max-width: 400px; position: relative; }
+.modal-close { position: absolute; top: 16px; right: 16px; background: none; border: none; color: #666; font-size: 1.2em; cursor: pointer; }
+.auth-modal h2 { text-align: center; margin-bottom: 24px; font-size: 1.5em; }
+.auth-modal form { display: flex; flex-direction: column; gap: 16px; }
+.auth-modal input { background: #0f0f12; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 14px 16px; color: #fff; font-size: 1em; outline: none; }
+.auth-modal input:focus { border-color: #8b5cf6; }
+.auth-modal button[type="submit"] { background: linear-gradient(135deg, #8b5cf6, #ec4899); color: #fff; border: none; padding: 14px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 1em; margin-top: 8px; }
+.auth-modal button[type="submit"]:disabled { opacity: 0.6; cursor: not-allowed; }
+.error-msg { color: #ef4444; font-size: 0.85em; text-align: center; }
+.auth-switch { text-align: center; margin-top: 16px; color: #666; font-size: 0.9em; }
+.auth-switch button { background: none; border: none; color: #8b5cf6; cursor: pointer; font-weight: 600; }
+.auth-switch button:hover { text-decoration: underline; }
+
+/* Profile Section */
+.profile-content { padding: 20px 0; }
+.profile-card { display: flex; align-items: center; gap: 20px; padding: 20px; background: rgba(255,255,255,0.03); border-radius: 12px; margin-bottom: 24px; }
+.profile-avatar { width: 64px; height: 64px; background: linear-gradient(135deg, #8b5cf6, #ec4899); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.5em; font-weight: 700; }
+.profile-info h3 { font-size: 1.2em; margin-bottom: 4px; }
+.profile-info p { color: #666; font-size: 0.9em; margin-bottom: 8px; }
+.role-badge { background: rgba(139, 92, 246, 0.2); color: #a78bfa; padding: 4px 12px; border-radius: 4px; font-size: 0.8em; font-weight: 600; text-transform: uppercase; }
+.twitch-section, .following-section { padding: 20px; background: rgba(255,255,255,0.03); border-radius: 12px; margin-bottom: 16px; }
+.twitch-section h4, .following-section h4 { margin-bottom: 12px; font-size: 1.1em; }
+.twitch-connected { display: flex; align-items: center; justify-content: space-between; }
+.twitch-connected strong { color: #9146ff; }
+.hint-text { color: #555; font-size: 0.85em; margin-top: 8px; }
+.auth-prompt { text-align: center; padding: 40px; }
+.auth-prompt p { color: #666; margin-bottom: 16px; }
+
+/* Leaderboard Animations */
+.leaderboard-list { display: flex; flex-direction: column; gap: 12px; }
+.list-item { 
+  display: flex; align-items: center; gap: 16px; padding: 12px 16px; background: rgba(255,255,255,0.03); border-radius: 12px; 
+  transition: all 0.3s ease; border: 1px solid transparent;
+}
+.list-item.moving-up { animation: slideUp 0.4s ease-out; border-color: rgba(34, 197, 94, 0.4); background: rgba(34, 197, 94, 0.1); }
+.list-item.moving-down { animation: slideDown 0.4s ease-out; border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.1); }
+.list-item.new-entry { animation: fadeInScale 0.4s ease-out; border-color: rgba(139, 92, 246, 0.4); background: rgba(139, 92, 246, 0.1); }
+
+@keyframes slideUp {
+  0% { transform: translateY(20px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+@keyframes slideDown {
+  0% { transform: translateY(-20px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+@keyframes fadeInScale {
+  0% { transform: scale(0.95); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.rank-badge { 
+  width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; 
+  border-radius: 8px; font-weight: 900; font-size: 1.1em; flex-shrink: 0;
+}
+.rank-1 { background: linear-gradient(135deg, #fbbf24, #f59e0b); color: #000; }
+.rank-2 { background: linear-gradient(135deg, #94a3b8, #64748b); color: #000; }
+.rank-3 { background: linear-gradient(135deg, #cd7f32, #a0522d); color: #fff; }
+.rank-4, .rank-5, .rank-6, .rank-7, .rank-8, .rank-9, .rank-10 { background: rgba(255,255,255,0.1); color: #888; }
+
+.likes-count { color: #ec4899; font-weight: 700; }
+
+.live-indicator { color: #ef4444; font-weight: 700; animation: pulse 1.5s infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.thumb-container.highlighted { box-shadow: 0 0 0 2px #8b5cf6; }
+
+/* WebSocket Indicator */
+.ws-indicator { display: inline-block; width: 8px; height: 8px; background: #22c55e; border-radius: 50%; margin-left: 6px; animation: pulse 1.5s infinite; }
+
+/* Section subtitle */
+.section-subtitle { color: #666; font-size: 0.9em; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }

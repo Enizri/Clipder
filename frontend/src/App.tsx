@@ -1,13 +1,13 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { api } from './api/client';
-import type { Clip, LeaderboardClip, AdminClip, Comment, EmoteResponse, GifResponse } from './types';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { api, createLeaderboardSocket } from './api/client';
+import type { Clip, LeaderboardClip, AdminClip, Comment, EmoteResponse, GifResponse, User } from './types';
 
-type Tab = 'swipe' | 'leaderboard' | 'admin';
+type Tab = 'swipe' | 'leaderboard' | 'admin' | 'profile';
 type EmoteTab = 'twitch' | 'bttv' | '7tv' | 'gifs';
 
 const videoUrlCache: Record<string, string> = {};
 
-function ClipPreview({ clip, onOpenTheater, children }: { clip: Clip; onOpenTheater: () => void; children?: React.ReactNode }) {
+const ClipPreview = React.memo(function ClipPreview({ clip, onOpenTheater, children }: { clip: Clip; onOpenTheater: () => void; children?: React.ReactNode }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -15,57 +15,56 @@ function ClipPreview({ clip, onOpenTheater, children }: { clip: Clip; onOpenThea
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState(5);
   const [progress, setProgress] = useState(0);
+  const [isHovering, setIsHovering] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const fetchedRef = useRef(false);
 
-  const handleMouseEnter = () => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (fetchedRef.current && videoSrc) {
-      video.volume = volume / 100;
-      video.muted = isMuted || volume === 0;
-      video.play().then(() => setIsPlaying(true)).catch(() => {});
-      return;
-    }
-
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
-
-    const cachedUrl = videoUrlCache[clip.id];
-    if (cachedUrl) {
-      video.src = cachedUrl;
-      setVideoSrc(cachedUrl);
-      video.volume = volume / 100;
-      video.muted = isMuted || volume === 0;
-      video.play().then(() => setIsPlaying(true)).catch(() => {});
-      return;
-    }
-
+  const fetchVideoUrl = useCallback(() => {
+    if (videoSrc) return;
     setIsLoading(true);
     api.getVideoUrl(clip.id).then((data) => {
       if (data.video_url) {
         videoUrlCache[clip.id] = data.video_url;
-        const vid = videoRef.current;
-        if (vid) {
-          vid.src = data.video_url;
-          setVideoSrc(data.video_url);
-          vid.volume = volume / 100;
-          vid.muted = isMuted || volume === 0;
-          vid.play().then(() => setIsPlaying(true)).catch(() => {});
-        }
+        setVideoSrc(data.video_url);
       }
-    }).catch((e) => console.error('Failed to fetch video:', e))
+    }).catch(() => {})
       .finally(() => setIsLoading(false));
+  }, [clip.id, videoSrc]);
+
+  useEffect(() => {
+    if (isHovering) {
+      fetchVideoUrl();
+    }
+  }, [isHovering, fetchVideoUrl]);
+
+  useEffect(() => {
+    if (isHovering && videoSrc) {
+      const video = videoRef.current;
+      if (!video) return;
+      if (video.readyState >= 2) {
+        video.volume = volume / 100;
+        video.muted = isMuted || volume === 0;
+        video.play().catch(() => {});
+        setIsPlaying(true);
+      } else {
+        video.addEventListener('loadeddata', () => {
+          video.volume = volume / 100;
+          video.muted = isMuted || volume === 0;
+          video.play().catch(() => {});
+          setIsPlaying(true);
+        }, { once: true });
+      }
+    } else if (videoRef.current) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    }
+  }, [isHovering, videoSrc, volume, isMuted]);
+
+  const handleMouseEnter = () => {
+    setIsHovering(true);
   };
 
   const handleMouseLeave = () => {
-    const video = videoRef.current;
-    if (video) {
-      video.pause();
-      video.currentTime = 0;
-    }
-    setIsPlaying(false);
+    setIsHovering(false);
   };
 
   const handlePlayPause = (e: React.MouseEvent) => {
@@ -142,11 +141,13 @@ function ClipPreview({ clip, onOpenTheater, children }: { clip: Clip; onOpenThea
       
       <video
         ref={videoRef}
+        src={videoSrc || undefined}
         className={`video-player ${isPlaying ? 'playing' : ''}`}
         loop
         muted={isMuted || volume === 0}
         playsInline
         onTimeUpdate={handleTimeUpdate}
+        preload="auto"
       />
       
       <div className={`video-loading ${isLoading ? 'active' : ''}`}></div>
@@ -177,61 +178,64 @@ function ClipPreview({ clip, onOpenTheater, children }: { clip: Clip; onOpenThea
       {children}
     </div>
   );
-}
+});
 
-function MiniThumb({ clip, onOpenTheater }: { clip: LeaderboardClip | AdminClip; onOpenTheater: () => void }) {
+const MiniThumb = React.memo(function MiniThumb({ clip, onOpenTheater, isHighlighted }: { clip: LeaderboardClip | AdminClip; onOpenTheater: () => void; isHighlighted?: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState(5);
+  const [isHovering, setIsHovering] = useState(false);
 
-  const fetchVideoUrl = useCallback(async () => {
-    if (videoSrc) return videoSrc;
+  const fetchVideoUrl = useCallback(() => {
+    if (videoSrc) return;
     setIsLoading(true);
-    try {
-      const data = await api.getVideoUrl(clip.id);
+    api.getVideoUrl(clip.id).then((data) => {
       if (data.video_url) {
+        videoUrlCache[clip.id] = data.video_url;
         setVideoSrc(data.video_url);
-        return data.video_url;
       }
-    } catch (e) {
-      console.error('Failed to fetch video:', e);
-    } finally {
-      setIsLoading(false);
-    }
-    return null;
+    }).catch(() => {})
+      .finally(() => setIsLoading(false));
   }, [clip.id, videoSrc]);
 
   useEffect(() => {
-    return () => {
-      const video = videoRef.current;
-      if (video) {
-        video.pause();
-        video.src = '';
-        video.load();
-      }
-    };
-  }, []);
-
-  const handleMouseEnter = async () => {
-    const src = await fetchVideoUrl();
-    if (src && videoRef.current) {
-      videoRef.current.src = src;
-      videoRef.current.volume = volume / 100;
-      videoRef.current.muted = isMuted || volume === 0;
-      videoRef.current.play().catch(() => {});
-      setIsPlaying(true);
+    if (isHovering) {
+      fetchVideoUrl();
     }
+  }, [isHovering, fetchVideoUrl]);
+
+  useEffect(() => {
+    if (isHovering && videoSrc) {
+      const video = videoRef.current;
+      if (!video) return;
+      if (video.readyState >= 2) {
+        video.volume = volume / 100;
+        video.muted = isMuted || volume === 0;
+        video.play().catch(() => {});
+        setIsPlaying(true);
+      } else {
+        video.addEventListener('loadeddata', () => {
+          video.volume = volume / 100;
+          video.muted = isMuted || volume === 0;
+          video.play().catch(() => {});
+          setIsPlaying(true);
+        }, { once: true });
+      }
+    } else if (videoRef.current) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    }
+  }, [isHovering, videoSrc, volume, isMuted]);
+
+  const handleMouseEnter = () => {
+    setIsHovering(true);
   };
 
   const handleMouseLeave = () => {
-    if (videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.currentTime = 0;
-    }
-    setIsPlaying(false);
+    setIsHovering(false);
   };
 
   const togglePlay = (e: React.MouseEvent) => {
@@ -273,13 +277,13 @@ function MiniThumb({ clip, onOpenTheater }: { clip: LeaderboardClip | AdminClip;
 
   return (
     <div
-      className={`thumb-container ${isLoading ? 'loading' : ''}`}
+      className={`thumb-container ${isLoading ? 'loading' : ''} ${isHighlighted ? 'highlighted' : ''}`}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
       <img src={clip.thumbnail_url} alt={clip.title} />
       <div className="mini-spinner"></div>
-      <video ref={videoRef} className={isPlaying ? 'playing' : ''} loop muted playsInline></video>
+      <video ref={videoRef} src={videoSrc || undefined} className={isPlaying ? 'playing' : ''} loop muted playsInline />
       <div className="mini-controls">
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
           <button className="mini-btn" onClick={togglePlay}>{isPlaying ? '⏸' : '▶'}</button>
@@ -298,7 +302,7 @@ function MiniThumb({ clip, onOpenTheater }: { clip: LeaderboardClip | AdminClip;
       </div>
     </div>
   );
-}
+});
 
 function EmotePicker({ onSelect, onClose }: { onSelect: (url: string, code: string) => void; onClose: () => void }) {
   const [activeTab, setActiveTab] = useState<EmoteTab>('twitch');
@@ -409,6 +413,85 @@ function EmotePicker({ onSelect, onClose }: { onSelect: (url: string, code: stri
   );
 }
 
+function AuthModal({ isOpen, onClose, onLogin }: { isOpen: boolean; onClose: () => void; onLogin: (token: string, user: User) => void }) {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      if (isLogin) {
+        const res = await api.login(email, password);
+        localStorage.setItem('token', res.access_token);
+        onLogin(res.access_token, res.user);
+        onClose();
+      } else {
+        const res = await api.register(username, email, password);
+        localStorage.setItem('token', res.access_token);
+        onLogin(res.access_token, res.user);
+        onClose();
+      }
+    } catch (err: any) {
+      setError(err.message || 'Authentication failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="auth-modal" onClick={e => e.stopPropagation()}>
+        <button className="modal-close" onClick={onClose}>✕</button>
+        <h2>{isLogin ? 'Welcome Back' : 'Create Account'}</h2>
+        <form onSubmit={handleSubmit}>
+          {!isLogin && (
+            <input
+              type="text"
+              placeholder="Username"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              required
+            />
+          )}
+          <input
+            type="email"
+            placeholder="Email"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            required
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            required
+          />
+          {error && <div className="error-msg">{error}</div>}
+          <button type="submit" disabled={loading}>
+            {loading ? 'Loading...' : (isLogin ? 'Login' : 'Sign Up')}
+          </button>
+        </form>
+        <p className="auth-switch">
+          {isLogin ? "Don't have an account? " : 'Already have an account? '}
+          <button type="button" onClick={() => setIsLogin(!isLogin)}>
+            {isLogin ? 'Sign Up' : 'Login'}
+          </button>
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('swipe');
   const [clips, setClips] = useState<Clip[]>([]);
@@ -417,6 +500,7 @@ function App() {
   const [currentCategory, setCurrentCategory] = useState('My Streamers');
   const [loading, setLoading] = useState(true);
   const [leaderboard, setLeaderboard] = useState<LeaderboardClip[]>([]);
+  const [prevLeaderboard, setPrevLeaderboard] = useState<Map<string, number>>(new Map());
   const [adminQueue, setAdminQueue] = useState<AdminClip[]>([]);
   const [showComments, setShowComments] = useState(false);
   const [activeCommentClip, setActiveCommentClip] = useState<{ id: string; title: string } | null>(null);
@@ -427,6 +511,9 @@ function App() {
   const [acceptHighlight, setAcceptHighlight] = useState(false);
   const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
   const [showEmotePicker, setShowEmotePicker] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
 
   const cardRef = useRef<HTMLDivElement>(null);
   const theaterVideoRef = useRef<HTMLVideoElement>(null);
@@ -435,20 +522,55 @@ function App() {
   const currentX = useRef(0);
   const isSwiping = useRef(false);
   const commentInputRef = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
 
-  const prefetchVideoUrls = (clips: Clip[]) => {
-    clips.slice(0, 3).forEach((clip) => {
-      if (!videoUrlCache[clip.id]) {
-        api.getVideoUrl(clip.id)
-          .then((data) => {
-            if (data.video_url) {
-              videoUrlCache[clip.id] = data.video_url;
-            }
-          })
-          .catch(() => {});
-      }
-    });
-  };
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      api.getMe()
+        .then(userData => {
+          setUser(userData);
+        })
+        .catch(() => {
+          localStorage.removeItem('token');
+        });
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('twitch_linked') === 'true') {
+      window.history.replaceState({}, '', window.location.pathname);
+      api.getMe()
+        .then(userData => setUser(userData))
+        .catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'leaderboard') {
+      loadLeaderboard();
+      
+      wsRef.current = createLeaderboardSocket((updatedClips) => {
+        const newLeaderboard = updatedClips.slice(0, 10);
+        
+        const prevPositions = new Map<string, number>();
+        leaderboard.forEach((clip, idx) => {
+          prevPositions.set(clip.id, idx);
+        });
+        setPrevLeaderboard(prevPositions);
+        
+        setLeaderboard(newLeaderboard);
+        setWsConnected(true);
+      });
+
+      return () => {
+        wsRef.current?.close();
+        setWsConnected(false);
+      };
+    } else {
+      wsRef.current?.close();
+      setWsConnected(false);
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     loadCategories();
@@ -457,12 +579,10 @@ function App() {
   useEffect(() => {
     if (activeTab === 'swipe') {
       loadClips();
-    } else if (activeTab === 'leaderboard') {
-      loadLeaderboard();
     } else if (activeTab === 'admin') {
       loadAdminQueue();
     }
-  }, [activeTab, currentCategory]);
+  }, [activeTab]);
 
   useEffect(() => {
     if (theaterVideo && theaterVideoRef.current) {
@@ -485,7 +605,13 @@ function App() {
       const data = await api.getClips(currentCategory);
       setClips(data.clips);
       setCurrentIndex(0);
-      prefetchVideoUrls(data.clips);
+      data.clips.slice(0, 3).forEach((clip) => {
+        if (!videoUrlCache[clip.id]) {
+          api.getVideoUrl(clip.id).then((res) => {
+            if (res.video_url) videoUrlCache[clip.id] = res.video_url;
+          }).catch(() => {});
+        }
+      });
     } catch (err) {
       console.error('Failed to load clips:', err);
     } finally {
@@ -496,7 +622,7 @@ function App() {
   const loadLeaderboard = async () => {
     try {
       const data = await api.getLeaderboard();
-      setLeaderboard(data);
+      setLeaderboard(data.slice(0, 10));
     } catch (err) {
       console.error('Failed to load leaderboard:', err);
     }
@@ -521,10 +647,10 @@ function App() {
   };
 
   const stopAllVideos = useCallback(() => {
-    const videos = document.querySelectorAll('video');
+    const videos = document.querySelectorAll('.clip-preview video');
     videos.forEach(video => {
-      video.pause();
-      video.currentTime = 0;
+      (video as HTMLVideoElement).pause();
+      (video as HTMLVideoElement).currentTime = 0;
     });
   }, []);
 
@@ -537,22 +663,35 @@ function App() {
     setSwipeDirection(direction);
     stopAllVideos();
 
+    const nextClip = clips[currentIndex + 1];
+    if (nextClip && !videoUrlCache[nextClip.id]) {
+      api.getVideoUrl(nextClip.id).then((data) => {
+        if (data.video_url) videoUrlCache[nextClip.id] = data.video_url;
+      }).catch(() => {});
+    }
+
     try {
       if (direction === 'right') {
-        await api.likeClip(currentClip.id);
+        if (user) {
+          await api.likeClip(currentClip.id);
+        } else {
+          await api.legacyLikeClip(currentClip.id);
+        }
       } else {
-        await api.dislikeClip(currentClip.id);
+        if (user) {
+          await api.dislikeClip(currentClip.id);
+        } else {
+          await api.legacyDislikeClip(currentClip.id);
+        }
       }
     } catch (err) {
       console.error('Failed to record swipe:', err);
     }
 
-    setTimeout(() => {
-      setCurrentIndex((prev) => prev + 1);
-      setSwipeDirection(null);
-      isSwiping.current = false;
-    }, 300);
-  }, [clips, currentIndex, stopAllVideos]);
+    setCurrentIndex((prev) => prev + 1);
+    setSwipeDirection(null);
+    isSwiping.current = false;
+  }, [clips, currentIndex, stopAllVideos, user]);
 
   const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
     if (isSwiping.current) return;
@@ -717,6 +856,15 @@ function App() {
     loadAdminQueue();
   };
 
+  const handleLogin = (_token: string, userData: User) => {
+    setUser(userData);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    setUser(null);
+  };
+
   const visibleClips = useMemo(() => clips.slice(currentIndex, Math.min(currentIndex + 3, clips.length)), [clips, currentIndex]);
 
   return (
@@ -725,10 +873,26 @@ function App() {
         <h1>Clip<span className="logo-accent">der</span> Pro</h1>
         <nav className="nav-tabs">
           <button className={`tab-btn ${activeTab === 'swipe' ? 'active' : ''}`} onClick={() => { setActiveTab('swipe'); closeComments(); stopAllVideos(); }}>Swipe & Vote</button>
-          <button className={`tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}`} onClick={() => { setActiveTab('leaderboard'); closeComments(); loadLeaderboard(); stopAllVideos(); }}>Leaderboard</button>
+          <button className={`tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}`} onClick={() => { setActiveTab('leaderboard'); closeComments(); loadLeaderboard(); stopAllVideos(); }}>
+            Leaderboard {wsConnected && <span className="ws-indicator"></span>}
+          </button>
           <button className={`tab-btn ${activeTab === 'admin' ? 'active' : ''}`} onClick={() => { setActiveTab('admin'); closeComments(); loadAdminQueue(); stopAllVideos(); }}>Admin Queue ({adminQueue.length})</button>
+          <button className={`tab-btn ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => { setActiveTab('profile'); closeComments(); stopAllVideos(); }}>Profile</button>
         </nav>
+        <div className="auth-section">
+          {user ? (
+            <div className="user-menu">
+              <span>{user.username}</span>
+              {user.twitch_username && <span className="twitch-badge">📺 {user.twitch_username}</span>}
+              <button onClick={handleLogout}>Logout</button>
+            </div>
+          ) : (
+            <button className="auth-btn" onClick={() => setShowAuthModal(true)}>Login</button>
+          )}
+        </div>
       </header>
+
+      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} onLogin={handleLogin} />
 
       <div className="app-container">
         <div id="swipe" className={`view-section ${activeTab === 'swipe' ? 'active' : ''}`}>
@@ -835,30 +999,50 @@ function App() {
 
         <div id="leaderboard" className={`view-section ${activeTab === 'leaderboard' ? 'active' : ''}`}>
           <div className="list-container">
-            <h2 className="section-title">🏆 Top Viral Clips</h2>
-            <div className="section-subtitle">Ranked by your swipes. Hover to preview, or click expand for Theater Mode!</div>
+            <h2 className="section-title">🏆 Top 10 Viral Clips</h2>
+            <div className="section-subtitle">
+              {wsConnected ? (
+                <span className="live-indicator">🔴 LIVE</span>
+              ) : (
+                <span>Live updates enabled when you're on this tab</span>
+              )}
+              {' '}- Hover to preview, or click expand for Theater Mode!
+            </div>
 
             {leaderboard.length === 0 ? (
               <div className="empty-msg">No clips have been liked yet!<br />Go swipe right to build the leaderboard.</div>
             ) : (
-              leaderboard.map((clip, index) => (
-                <div key={clip.id} className="list-item">
-                  <div style={{ fontSize: '1.2em', fontWeight: 900, color: '#888', width: '40px', textAlign: 'center' }}>#{index + 1}</div>
-                  <div className="thumb-wrapper">
-                    <MiniThumb clip={clip} onOpenTheater={() => openTheaterMode(clip.id)} />
-                  </div>
-                  <div className="item-details">
-                    <div className="item-title">{clip.title}</div>
-                    <div className="item-stats">
-                      <span>♥ {clip.local_likes} Likes</span>
-                      <button className="social-btn" style={{ padding: '2px 8px', fontSize: '1em', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)' }} onClick={() => openComments(clip.id, clip.title)}>💬 {clip.comment_count}</button>
-                      <span>👁 {formatViews(clip.view_count)} views</span>
-                      <span>{clip.channel}</span>
+              <div className="leaderboard-list">
+                {leaderboard.map((clip, index) => {
+                  const prevIndex = prevLeaderboard.get(clip.id);
+                  const isMovingUp = prevIndex !== undefined && prevIndex > index;
+                  const isMovingDown = prevIndex !== undefined && prevIndex < index;
+                  const isNew = prevIndex === undefined;
+                  
+                  return (
+                    <div 
+                      key={clip.id} 
+                      className={`list-item ${isMovingUp ? 'moving-up' : ''} ${isMovingDown ? 'moving-down' : ''} ${isNew ? 'new-entry' : ''}`}
+                      style={{ animationDelay: `${index * 50}ms` }}
+                    >
+                      <div className={`rank-badge rank-${index + 1}`}>#{index + 1}</div>
+                      <div className="thumb-wrapper">
+                        <MiniThumb clip={clip} onOpenTheater={() => openTheaterMode(clip.id)} isHighlighted={isMovingUp || isMovingDown || isNew} />
+                      </div>
+                      <div className="item-details">
+                        <div className="item-title">{clip.title}</div>
+                        <div className="item-stats">
+                          <span className="likes-count">♥ {clip.local_likes} Likes</span>
+                          <button className="social-btn" style={{ padding: '2px 8px', fontSize: '1em', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)' }} onClick={() => openComments(clip.id, clip.title)}>💬 {clip.comment_count}</button>
+                          <span>👁 {formatViews(clip.view_count)} views</span>
+                          <span>{clip.channel}</span>
+                        </div>
+                      </div>
+                      <button className="btn-small btn-outline" onClick={() => handleAddToQueue(clip.id)}>+ Send to Queue</button>
                     </div>
-                  </div>
-                  <button className="btn-small btn-outline" onClick={() => handleAddToQueue(clip.id)}>+ Send to Queue</button>
-                </div>
-              ))
+                  );
+                })}
+              </div>
             )}
           </div>
         </div>
@@ -894,6 +1078,60 @@ function App() {
               <button className="btn-small btn-primary">Process & Upload All</button>
             </div>
           )}
+        </div>
+
+        <div id="profile" className={`view-section ${activeTab === 'profile' ? 'active' : ''}`}>
+          <div className="list-container">
+            <h2 className="section-title">👤 Profile</h2>
+            
+            {user ? (
+              <div className="profile-content">
+                <div className="profile-card">
+                  <div className="profile-avatar">{user.username.charAt(0).toUpperCase()}</div>
+                  <div className="profile-info">
+                    <h3>{user.username}</h3>
+                    <p>{user.email}</p>
+                    <span className="role-badge">{user.role}</span>
+                  </div>
+                </div>
+                
+                <div className="twitch-section">
+                  <h4>📺 Twitch Account</h4>
+                  {user.twitch_username ? (
+                    <div className="twitch-connected">
+                      <span>Connected as: <strong>@{user.twitch_username}</strong></span>
+                      <button className="btn-small btn-outline" onClick={() => api.unlinkTwitch().then(() => window.location.reload())}>Unlink</button>
+                    </div>
+                  ) : (
+                    <button className="btn-small btn-primary" onClick={async () => {
+                      const { authorization_url } = await api.getTwitchLoginUrl();
+                      const popup = window.open(authorization_url, 'Twitch OAuth', 'width=600,height=700');
+                      
+                      const handleMessage = (event: MessageEvent) => {
+                        if (event.data?.type === 'twitch_linked') {
+                          window.removeEventListener('message', handleMessage);
+                          api.getMe().then(setUser);
+                          popup?.close();
+                        }
+                      };
+                      window.addEventListener('message', handleMessage);
+                    }}>Connect Twitch Account</button>
+                  )}
+                </div>
+
+                <div className="following-section">
+                  <h4>⭐ My Streamers</h4>
+                  <p className="section-subtitle">Streamers you want to see in your swipe feed</p>
+                  <p className="hint-text">Connect your Twitch account above to sync your follows automatically!</p>
+                </div>
+              </div>
+            ) : (
+              <div className="auth-prompt">
+                <p>Please login to access your profile</p>
+                <button className="btn-primary" onClick={() => setShowAuthModal(true)}>Login</button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

@@ -40,37 +40,28 @@ Task: Refactor ClipApp to FastAPI + React/TS/Vite
 ```
 ClipApp/
 ├── pyproject.toml
-├── core.py              # Untouched - Source of Truth
-├── main.py              # FastAPI Entry Point
+├── core.py               # <--- KEEP HERE (Level 0 Engine dont change)
+├── main.py               # <--- FastAPI Entry Point
 ├── backend/
-│   ├── __init__.py
 │   ├── api/
-│   │   ├── __init__.py
 │   │   └── v1/
-│   │       ├── __init__.py
+│   │       ├── deps.py          # NEW: Auth guards (is_pro, get_current_user)
 │   │       └── endpoints/
-│   │           ├── __init__.py
-│   │           ├── clips.py
-│   │           ├── leaderboard.py
-│   │           └── admin.py
+│   │           ├── auth.py      # NEW: Login/Register/Twitch Link
+│   │           ├── clips.py     # Swipe & Like logic
+│   │           ├── leaderboard.py # Top 10 Monthly Logic
+│   │           └── admin.py     # Pro Playground
 │   ├── core/
+│   │   ├── config.py     # Pydantic Settings
+│   │   ├── security.py   # NEW: JWT/Hashing logic
+│   │   └── state.py      # UPDATED: WebSocket Broadcaster
+│   ├── models/           # NEW: PostgreSQL/SQLAlchemy Models
 │   │   ├── __init__.py
-│   │   ├── config.py
-│   │   └── state.py
-│   └── schemas/
-│       ├── __init__.py
-│       ├── clip.py
-│       ├── leaderboard.py
-│       └── admin.py
-└── frontend/            # React/TS Vite Project
-    ├── src/
-    │   ├── api/
-    │   ├── components/
-    │   ├── hooks/
-    │   └── App.tsx
-    └── package.json
-```
-
+│   │   ├── user.py       # Roles & Twitch ID
+│   │   ├── clip.py       # Month Keys & Scores
+│   │   └── vote.py       # User-Clip relations
+│   └── schemas/          # Pydantic Contracts
+└── frontend/             # React/TS Project (Vite)
 ---
 
 ## 4. Execution Protocol

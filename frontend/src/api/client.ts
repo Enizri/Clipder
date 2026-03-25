@@ -12,12 +12,15 @@ import type {
 } from '../types';
 
 const API_BASE = '/api';
+const WS_BASE = `ws://${window.location.host}`;
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
+  const token = localStorage.getItem('token');
   const response = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options?.headers,
     },
   });
@@ -28,6 +31,55 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // Auth
+  login: (email: string, password: string): Promise<{ access_token: string; user: any }> =>
+    fetchJson('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+
+  register: (username: string, email: string, password: string): Promise<{ access_token: string; user: any }> =>
+    fetchJson('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ username, email, password }),
+    }),
+
+  getMe: (): Promise<any> => fetchJson('/auth/me'),
+
+  // Twitch OAuth
+  getTwitchLoginUrl: (): Promise<{ authorization_url: string }> =>
+    fetchJson('/auth/twitch/login'),
+
+  linkTwitch: (code: string): Promise<any> =>
+    fetchJson('/auth/twitch/link', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
+
+  unlinkTwitch: (): Promise<any> =>
+    fetchJson('/auth/twitch/unlink', { method: 'DELETE' }),
+
+  // Following
+  getFollowing: (): Promise<any[]> => fetchJson('/api/following'),
+
+  addFollowing: (streamer_name: string, streamer_id: string): Promise<any> =>
+    fetchJson('/api/following', {
+      method: 'POST',
+      body: JSON.stringify({ streamer_name, streamer_id }),
+    }),
+
+  removeFollowing: (streamer_id: string): Promise<any> =>
+    fetchJson(`/api/following/${streamer_id}`, { method: 'DELETE' }),
+
+  getTwitchFollows: (): Promise<any[]> => fetchJson('/api/following/twitch/follows'),
+
+  searchChannels: (query: string): Promise<any[]> =>
+    fetchJson(`/api/following/search?q=${encodeURIComponent(query)}`),
+
+  syncFollows: (): Promise<any> =>
+    fetchJson('/api/following/sync', { method: 'POST' }),
+
+  // Clips
   getClips: (category: string = 'My Streamers'): Promise<ClipsResponse> =>
     fetchJson<ClipsResponse>(`${API_BASE}/clips?category=${encodeURIComponent(category)}`),
 
@@ -37,13 +89,28 @@ export const api = {
   getVideoUrl: (clipId: string): Promise<VideoUrlResponse> =>
     fetchJson<VideoUrlResponse>(`${API_BASE}/clip/${clipId}/video-url`),
 
+  // Votes (authenticated)
   likeClip: (clipId: string): Promise<ClipActionResponse> =>
+    fetchJson<ClipActionResponse>(`${API_BASE}/votes/clip/${clipId}/vote?vote_type=like`, {
+      method: 'POST',
+    }),
+
+  dislikeClip: (clipId: string): Promise<ClipActionResponse> =>
+    fetchJson<ClipActionResponse>(`${API_BASE}/votes/clip/${clipId}/vote?vote_type=dislike`, {
+      method: 'POST',
+    }),
+
+  getClipVotes: (clipId: string): Promise<{ likes: number; dislikes: number }> =>
+    fetchJson(`${API_BASE}/votes/clip/${clipId}/votes`),
+
+  // Legacy endpoints (still work without auth)
+  legacyLikeClip: (clipId: string): Promise<ClipActionResponse> =>
     fetchJson<ClipActionResponse>(`${API_BASE}/clip/${clipId}/action`, {
       method: 'POST',
       body: JSON.stringify({ action: 'like' }),
     }),
 
-  dislikeClip: (clipId: string): Promise<ClipActionResponse> =>
+  legacyDislikeClip: (clipId: string): Promise<ClipActionResponse> =>
     fetchJson<ClipActionResponse>(`${API_BASE}/clip/${clipId}/action`, {
       method: 'POST',
       body: JSON.stringify({ action: 'dislike' }),
@@ -88,3 +155,33 @@ export const api = {
   searchGifs: (query: string, limit?: number): Promise<GifResponse> =>
     fetchJson<GifResponse>(`${API_BASE}/gifs?q=${encodeURIComponent(query)}${limit ? `&limit=${limit}` : ''}`),
 };
+
+// WebSocket for live leaderboard updates
+export function createLeaderboardSocket(onUpdate: (clips: LeaderboardClip[]) => void) {
+  const ws = new WebSocket(`${WS_BASE}/ws/leaderboard`);
+  
+  ws.onopen = () => {
+    console.log('WebSocket connected');
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === 'leaderboard_update') {
+        onUpdate(data.data);
+      }
+    } catch (e) {
+      console.error('Failed to parse WebSocket message:', e);
+    }
+  };
+
+  ws.onerror = (error) => {
+    console.error('WebSocket error:', error);
+  };
+
+  ws.onclose = () => {
+    console.log('WebSocket disconnected');
+  };
+
+  return ws;
+}
