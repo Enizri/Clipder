@@ -5,6 +5,8 @@ import type { Clip, LeaderboardClip, AdminClip, Comment, EmoteResponse, GifRespo
 type Tab = 'swipe' | 'leaderboard' | 'admin';
 type EmoteTab = 'twitch' | 'bttv' | '7tv' | 'gifs';
 
+const videoUrlCache: Record<string, string> = {};
+
 function ClipPreview({ clip, onOpenTheater, children }: { clip: Clip; onOpenTheater: () => void; children?: React.ReactNode }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
@@ -13,58 +15,57 @@ function ClipPreview({ clip, onOpenTheater, children }: { clip: Clip; onOpenThea
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState(5);
   const [progress, setProgress] = useState(0);
-  const [isHovering, setIsHovering] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  const fetchVideoUrl = useCallback(async () => {
-    if (videoSrc) return;
-    setIsLoading(true);
-    try {
-      const data = await api.getVideoUrl(clip.id);
-      if (data.video_url) {
-        setVideoSrc(data.video_url);
-      }
-    } catch (e) {
-      console.error('Failed to fetch video:', e);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [clip.id, videoSrc]);
-
-  useEffect(() => {
-    if (isHovering && videoSrc) {
-      const video = videoRef.current;
-      if (video && video.readyState >= 2) {
-        video.volume = volume / 100;
-        video.muted = isMuted || volume === 0;
-        video.play().catch(() => {});
-        setIsPlaying(true);
-      } else if (video && videoSrc) {
-        setIsLoading(true);
-        video.addEventListener('loadeddata', () => {
-          setIsLoading(false);
-          video.volume = volume / 100;
-          video.muted = isMuted || volume === 0;
-          video.play().catch(() => {});
-          setIsPlaying(true);
-        }, { once: true });
-      }
-    } else {
-      const video = videoRef.current;
-      if (video) {
-        video.pause();
-      }
-      setIsPlaying(false);
-    }
-  }, [isHovering, videoSrc, volume, isMuted]);
+  const fetchedRef = useRef(false);
 
   const handleMouseEnter = () => {
-    setIsHovering(true);
-    fetchVideoUrl();
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (fetchedRef.current && videoSrc) {
+      video.volume = volume / 100;
+      video.muted = isMuted || volume === 0;
+      video.play().then(() => setIsPlaying(true)).catch(() => {});
+      return;
+    }
+
+    if (fetchedRef.current) return;
+    fetchedRef.current = true;
+
+    const cachedUrl = videoUrlCache[clip.id];
+    if (cachedUrl) {
+      video.src = cachedUrl;
+      setVideoSrc(cachedUrl);
+      video.volume = volume / 100;
+      video.muted = isMuted || volume === 0;
+      video.play().then(() => setIsPlaying(true)).catch(() => {});
+      return;
+    }
+
+    setIsLoading(true);
+    api.getVideoUrl(clip.id).then((data) => {
+      if (data.video_url) {
+        videoUrlCache[clip.id] = data.video_url;
+        const vid = videoRef.current;
+        if (vid) {
+          vid.src = data.video_url;
+          setVideoSrc(data.video_url);
+          vid.volume = volume / 100;
+          vid.muted = isMuted || volume === 0;
+          vid.play().then(() => setIsPlaying(true)).catch(() => {});
+        }
+      }
+    }).catch((e) => console.error('Failed to fetch video:', e))
+      .finally(() => setIsLoading(false));
   };
 
   const handleMouseLeave = () => {
-    setIsHovering(false);
+    const video = videoRef.current;
+    if (video) {
+      video.pause();
+      video.currentTime = 0;
+    }
+    setIsPlaying(false);
   };
 
   const handlePlayPause = (e: React.MouseEvent) => {
@@ -139,17 +140,14 @@ function ClipPreview({ clip, onOpenTheater, children }: { clip: Clip; onOpenThea
       <img src={clip.thumbnail_url} className="clip-thumbnail" alt={clip.title} draggable={false} 
            style={{ opacity: isPlaying ? 0 : 1 }} />
       
-      {videoSrc && (
-        <video
-          ref={videoRef}
-          className={`video-player ${isPlaying ? 'playing' : ''}`}
-          src={videoSrc}
-          loop
-          muted={isMuted || volume === 0}
-          playsInline
-          onTimeUpdate={handleTimeUpdate}
-        />
-      )}
+      <video
+        ref={videoRef}
+        className={`video-player ${isPlaying ? 'playing' : ''}`}
+        loop
+        muted={isMuted || volume === 0}
+        playsInline
+        onTimeUpdate={handleTimeUpdate}
+      />
       
       <div className={`video-loading ${isLoading ? 'active' : ''}`}></div>
       
@@ -205,6 +203,17 @@ function MiniThumb({ clip, onOpenTheater }: { clip: LeaderboardClip | AdminClip;
     }
     return null;
   }, [clip.id, videoSrc]);
+
+  useEffect(() => {
+    return () => {
+      const video = videoRef.current;
+      if (video) {
+        video.pause();
+        video.src = '';
+        video.load();
+      }
+    };
+  }, []);
 
   const handleMouseEnter = async () => {
     const src = await fetchVideoUrl();
@@ -413,6 +422,7 @@ function App() {
   const [activeCommentClip, setActiveCommentClip] = useState<{ id: string; title: string } | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [theaterVideo, setTheaterVideo] = useState<{ clipId: string; src: string } | null>(null);
+  const [theaterLoading, setTheaterLoading] = useState(false);
   const [rejectHighlight, setRejectHighlight] = useState(false);
   const [acceptHighlight, setAcceptHighlight] = useState(false);
   const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
@@ -425,6 +435,20 @@ function App() {
   const currentX = useRef(0);
   const isSwiping = useRef(false);
   const commentInputRef = useRef<HTMLDivElement>(null);
+
+  const prefetchVideoUrls = (clips: Clip[]) => {
+    clips.slice(0, 3).forEach((clip) => {
+      if (!videoUrlCache[clip.id]) {
+        api.getVideoUrl(clip.id)
+          .then((data) => {
+            if (data.video_url) {
+              videoUrlCache[clip.id] = data.video_url;
+            }
+          })
+          .catch(() => {});
+      }
+    });
+  };
 
   useEffect(() => {
     loadCategories();
@@ -461,6 +485,7 @@ function App() {
       const data = await api.getClips(currentCategory);
       setClips(data.clips);
       setCurrentIndex(0);
+      prefetchVideoUrls(data.clips);
     } catch (err) {
       console.error('Failed to load clips:', err);
     } finally {
@@ -495,6 +520,14 @@ function App() {
     }
   };
 
+  const stopAllVideos = useCallback(() => {
+    const videos = document.querySelectorAll('video');
+    videos.forEach(video => {
+      video.pause();
+      video.currentTime = 0;
+    });
+  }, []);
+
   const handleSwipe = useCallback(async (direction: 'left' | 'right') => {
     if (isSwiping.current) return;
     const currentClip = clips[currentIndex];
@@ -502,6 +535,7 @@ function App() {
 
     isSwiping.current = true;
     setSwipeDirection(direction);
+    stopAllVideos();
 
     try {
       if (direction === 'right') {
@@ -518,7 +552,7 @@ function App() {
       setSwipeDirection(null);
       isSwiping.current = false;
     }, 300);
-  }, [clips, currentIndex]);
+  }, [clips, currentIndex, stopAllVideos]);
 
   const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
     if (isSwiping.current) return;
@@ -529,6 +563,7 @@ function App() {
     startX.current = 'touches' in e ? e.touches[0].clientX : e.clientX;
     currentX.current = startX.current;
     cardRef.current?.classList.add('dragging');
+    stopAllVideos();
   };
 
   const handleMouseMove = useCallback((e: MouseEvent | TouchEvent) => {
@@ -633,6 +668,7 @@ function App() {
   };
 
   const openTheaterMode = async (clipId: string) => {
+    setTheaterLoading(true);
     try {
       const data = await api.getVideoUrl(clipId);
       if (data.video_url) {
@@ -640,10 +676,15 @@ function App() {
       }
     } catch (err) {
       alert('Could not load full video.');
+    } finally {
+      setTheaterLoading(false);
     }
   };
 
   const closeTheaterMode = () => {
+    if (theaterVideoRef.current) {
+      theaterVideoRef.current.pause();
+    }
     setTheaterVideo(null);
   };
 
@@ -658,6 +699,7 @@ function App() {
     document.querySelectorAll('.cat-pill').forEach(el => el.classList.remove('active'));
     e.currentTarget.classList.add('active');
     
+    stopAllVideos();
     setClips([]);
     setCurrentIndex(0);
     setLoading(true);
@@ -682,9 +724,9 @@ function App() {
       <header>
         <h1>Clip<span className="logo-accent">der</span> Pro</h1>
         <nav className="nav-tabs">
-          <button className={`tab-btn ${activeTab === 'swipe' ? 'active' : ''}`} onClick={() => { setActiveTab('swipe'); closeComments(); }}>Swipe & Vote</button>
-          <button className={`tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}`} onClick={() => { setActiveTab('leaderboard'); closeComments(); loadLeaderboard(); }}>Leaderboard</button>
-          <button className={`tab-btn ${activeTab === 'admin' ? 'active' : ''}`} onClick={() => { setActiveTab('admin'); closeComments(); loadAdminQueue(); }}>Admin Queue ({adminQueue.length})</button>
+          <button className={`tab-btn ${activeTab === 'swipe' ? 'active' : ''}`} onClick={() => { setActiveTab('swipe'); closeComments(); stopAllVideos(); }}>Swipe & Vote</button>
+          <button className={`tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}`} onClick={() => { setActiveTab('leaderboard'); closeComments(); loadLeaderboard(); stopAllVideos(); }}>Leaderboard</button>
+          <button className={`tab-btn ${activeTab === 'admin' ? 'active' : ''}`} onClick={() => { setActiveTab('admin'); closeComments(); loadAdminQueue(); stopAllVideos(); }}>Admin Queue ({adminQueue.length})</button>
         </nav>
       </header>
 
@@ -860,7 +902,11 @@ function App() {
         <button className="theater-close" onClick={closeTheaterMode}>✕</button>
         <div className="theater-content">
           <div className="theater-video-wrapper">
-            {theaterVideo && <video id="theater-video" ref={theaterVideoRef} controls autoPlay src={theaterVideo.src}></video>}
+            {theaterLoading ? (
+              <div style={{ width: '100%', aspectRatio: '16/9', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000', borderRadius: '16px' }}>
+                <div className="video-loading active"></div>
+              </div>
+            ) : theaterVideo && <video id="theater-video" ref={theaterVideoRef} controls autoPlay src={theaterVideo.src}></video>}
           </div>
         </div>
       </div>
