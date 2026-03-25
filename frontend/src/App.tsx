@@ -7,7 +7,18 @@ type EmoteTab = 'twitch' | 'bttv' | '7tv' | 'gifs';
 
 const videoUrlCache: Record<string, string> = {};
 
-const ClipPreview = React.memo(function ClipPreview({ clip, onOpenTheater, children }: { clip: Clip; onOpenTheater: () => void; children?: React.ReactNode }) {
+const getSeenClipIds = (): Set<string> => {
+  const stored = localStorage.getItem('seenClipIds');
+  return stored ? new Set(JSON.parse(stored)) : new Set();
+};
+
+const addSeenClipId = (clipId: string): void => {
+  const seen = getSeenClipIds();
+  seen.add(clipId);
+  localStorage.setItem('seenClipIds', JSON.stringify([...seen]));
+};
+
+const ClipPreview = React.memo(function ClipPreview({ clip, onOpenTheater, children, isPreload }: { clip: Clip; onOpenTheater: () => void; children?: React.ReactNode; isPreload?: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -20,6 +31,10 @@ const ClipPreview = React.memo(function ClipPreview({ clip, onOpenTheater, child
 
   const fetchVideoUrl = useCallback(() => {
     if (videoSrc) return;
+    if (videoUrlCache[clip.id]) {
+      setVideoSrc(videoUrlCache[clip.id]);
+      return;
+    }
     setIsLoading(true);
     api.getVideoUrl(clip.id).then((data) => {
       if (data.video_url) {
@@ -31,33 +46,53 @@ const ClipPreview = React.memo(function ClipPreview({ clip, onOpenTheater, child
   }, [clip.id, videoSrc]);
 
   useEffect(() => {
-    if (isHovering) {
-      fetchVideoUrl();
+    if (isPreload && !videoSrc && videoUrlCache[clip.id]) {
+      setVideoSrc(videoUrlCache[clip.id]);
     }
-  }, [isHovering, fetchVideoUrl]);
+  }, [isPreload, videoSrc, clip.id]);
 
   useEffect(() => {
-    if (isHovering && videoSrc) {
-      const video = videoRef.current;
-      if (!video) return;
-      if (video.readyState >= 2) {
+    if (isHovering || isPreload) {
+      fetchVideoUrl();
+    }
+  }, [isHovering, isPreload, fetchVideoUrl]);
+
+  useEffect(() => {
+    if (isHovering && !videoSrc && !isLoading) {
+      fetchVideoUrl();
+    }
+  }, [isHovering, videoSrc, isLoading, fetchVideoUrl]);
+
+  useEffect(() => {
+    if (!videoSrc || !isHovering) return;
+    const video = videoRef.current;
+    if (!video) return;
+    
+    if (video.readyState >= 2) {
+      video.volume = volume / 100;
+      video.muted = false;
+      video.play().catch(() => {});
+      setIsPlaying(true);
+    } else {
+      const onCanPlay = () => {
         video.volume = volume / 100;
-        video.muted = isMuted || volume === 0;
+        video.muted = false;
         video.play().catch(() => {});
         setIsPlaying(true);
-      } else {
-        video.addEventListener('loadeddata', () => {
-          video.volume = volume / 100;
-          video.muted = isMuted || volume === 0;
-          video.play().catch(() => {});
-          setIsPlaying(true);
-        }, { once: true });
-      }
-    } else if (videoRef.current) {
-      videoRef.current.pause();
-      setIsPlaying(false);
+      };
+      video.addEventListener('canplay', onCanPlay, { once: true });
     }
-  }, [isHovering, videoSrc, volume, isMuted]);
+  }, [isHovering, videoSrc, volume]);
+
+  useEffect(() => {
+    if (!isHovering && isPlaying) {
+      const video = videoRef.current;
+      if (video) {
+        video.pause();
+        setIsPlaying(false);
+      }
+    }
+  }, [isHovering, isPlaying]);
 
   const handleMouseEnter = () => {
     setIsHovering(true);
@@ -144,7 +179,7 @@ const ClipPreview = React.memo(function ClipPreview({ clip, onOpenTheater, child
         src={videoSrc || undefined}
         className={`video-player ${isPlaying ? 'playing' : ''}`}
         loop
-        muted={isMuted || volume === 0}
+        muted={isMuted}
         playsInline
         onTimeUpdate={handleTimeUpdate}
         preload="auto"
@@ -577,12 +612,23 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'swipe') {
-      loadClips();
+    if (activeTab === 'swipe' && currentCategory) {
+      if (!currentCategory) return;
+      setLoading(true);
+      api.getClips(currentCategory).then((data) => {
+        const seenIds = getSeenClipIds();
+        const filteredClips = data.clips.filter(c => !seenIds.has(c.id));
+        setClips(filteredClips);
+        setCurrentIndex(0);
+      }).catch((err) => {
+        console.error('Failed to load clips:', err);
+      }).finally(() => {
+        setLoading(false);
+      });
     } else if (activeTab === 'admin') {
       loadAdminQueue();
     }
-  }, [activeTab]);
+  }, [activeTab, currentCategory]);
 
   useEffect(() => {
     if (theaterVideo && theaterVideoRef.current) {
@@ -596,26 +642,6 @@ function App() {
       setCategories(['My Streamers', ...data.categories]);
     } catch (err) {
       console.error('Failed to load categories:', err);
-    }
-  };
-
-  const loadClips = async () => {
-    setLoading(true);
-    try {
-      const data = await api.getClips(currentCategory);
-      setClips(data.clips);
-      setCurrentIndex(0);
-      data.clips.slice(0, 3).forEach((clip) => {
-        if (!videoUrlCache[clip.id]) {
-          api.getVideoUrl(clip.id).then((res) => {
-            if (res.video_url) videoUrlCache[clip.id] = res.video_url;
-          }).catch(() => {});
-        }
-      });
-    } catch (err) {
-      console.error('Failed to load clips:', err);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -663,6 +689,8 @@ function App() {
     setSwipeDirection(direction);
     stopAllVideos();
 
+    addSeenClipId(currentClip.id);
+
     const nextClip = clips[currentIndex + 1];
     if (nextClip && !videoUrlCache[nextClip.id]) {
       api.getVideoUrl(nextClip.id).then((data) => {
@@ -670,28 +698,35 @@ function App() {
       }).catch(() => {});
     }
 
-    try {
-      if (direction === 'right') {
-        if (user) {
-          await api.likeClip(currentClip.id);
-        } else {
-          await api.legacyLikeClip(currentClip.id);
-        }
+    if (direction === 'right') {
+      if (user) {
+        api.likeClip(currentClip.id).catch(() => {});
       } else {
-        if (user) {
-          await api.dislikeClip(currentClip.id);
-        } else {
-          await api.legacyDislikeClip(currentClip.id);
-        }
+        api.legacyLikeClip(currentClip.id).catch(() => {});
       }
-    } catch (err) {
-      console.error('Failed to record swipe:', err);
+    } else {
+      if (user) {
+        api.dislikeClip(currentClip.id).catch(() => {});
+      } else {
+        api.legacyDislikeClip(currentClip.id).catch(() => {});
+      }
     }
 
-    setCurrentIndex((prev) => prev + 1);
+    const newIndex = currentIndex + 1;
+    if (newIndex >= clips.length - 2) {
+      api.getClips(currentCategory).then((data) => {
+        const seenIds = getSeenClipIds();
+        const newClips = data.clips.filter(c => !seenIds.has(c.id));
+        if (newClips.length > 0) {
+          setClips(prev => [...prev.filter(c => !seenIds.has(c.id)), ...newClips]);
+        }
+      }).catch(() => {});
+    }
+
+    setCurrentIndex(newIndex);
     setSwipeDirection(null);
     isSwiping.current = false;
-  }, [clips, currentIndex, stopAllVideos, user]);
+  }, [clips, currentIndex, stopAllVideos, user, currentCategory]);
 
   const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
     if (isSwiping.current) return;
@@ -841,7 +876,6 @@ function App() {
     stopAllVideos();
     setClips([]);
     setCurrentIndex(0);
-    setLoading(true);
     setCurrentCategory(cat);
   };
 
@@ -956,7 +990,7 @@ function App() {
                         : undefined,
                       opacity: idx === 0 && swipeDirection ? 0 : idx > 0 ? 1 - idx * 0.12 : 1,
                       pointerEvents: idx === 0 ? 'auto' : 'none',
-                      transition: swipeDirection ? 'transform 0.3s ease-out, opacity 0.3s' : 'transform 0.3s cubic-bezier(0.2, 1, 0.3, 1), opacity 0.3s ease-out'
+                      transition: swipeDirection ? 'transform 0.28s ease-out, opacity 0.25s' : 'transform 0.28s ease-out, opacity 0.25s ease-out'
                     }}
                     onMouseDown={idx === 0 ? handleMouseDown : undefined}
                     onTouchStart={idx === 0 ? handleMouseDown : undefined}
@@ -964,6 +998,7 @@ function App() {
                     <ClipPreview
                       clip={clip}
                       onOpenTheater={() => openTheaterMode(clip.id)}
+                      isPreload={idx > 0}
                     >
                       <div className="clip-info" style={{ pointerEvents: 'none' }}>
                         <div className="clip-title">{clip.title}</div>

@@ -63,7 +63,7 @@ header h1 { font-size: 1.6em; font-weight: 900; color: #ffffff; letter-spacing: 
     box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.05); 
     cursor: grab; transform-origin: center center; user-select: none; 
     will-change: transform, opacity;
-    transition: transform 0.3s cubic-bezier(0.2, 1, 0.3, 1), opacity 0.3s ease-out;
+    transition: transform 0.28s ease-out, opacity 0.25s ease-out;
 }
 .clip-card.dragging { transition: none !important; cursor: grabbing; }
 .clip-card:not(.top-card) .blur-bg-container { display: none !important; }
@@ -81,8 +81,8 @@ header h1 { font-size: 1.6em; font-weight: 900; color: #ffffff; letter-spacing: 
 .blur-bg-container img { width: 100%; height: 100%; object-fit: cover; }
 .clip-thumbnail, .video-player { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain !important; z-index: 1; }
 .clip-thumbnail { transition: opacity 0.3s ease; z-index: 2; }
-.video-player { z-index: 1; opacity: 0; transition: opacity 0.3s ease; }
-.video-player.playing { opacity: 1; }
+.video-player { z-index: 1; opacity: 0; transition: opacity 0.3s ease; pointer-events: none; }
+.video-player.playing { opacity: 1; pointer-events: auto; }
 .video-loading { 
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
     width: 36px; height: 36px; border: 2px solid rgba(255, 255, 255, 0.1); border-top-color: #8b5cf6; 

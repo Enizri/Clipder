@@ -71,6 +71,7 @@ class AppState:
         self.clip_scores: Dict[str, int] = {}
         self.clip_comments: Dict[str, List[Dict[str, str]]] = {}
         self.admin_upload_queue: Dict[str, Dict[str, Any]] = {}
+        self.video_url_cache: Dict[str, Optional[str]] = {}
 
         self.bot_initialized = True
 
@@ -187,6 +188,17 @@ class AppState:
         return clip
 
     async def get_video_url(self, clip_id: str) -> Dict[str, Any]:
+        if clip_id in self.video_url_cache:
+            cached_url = self.video_url_cache[clip_id]
+            if cached_url:
+                clip = self.clip_metadata_store.get(clip_id)
+                return {
+                    "video_url": cached_url,
+                    "title": clip.get("title", "") if clip else "",
+                }
+            elif cached_url is None:
+                return {"error": "No video URL found"}
+
         clip = self.clip_metadata_store.get(clip_id)
         if not clip:
             return {"error": "Clip not found"}
@@ -213,13 +225,16 @@ class AppState:
                                 break
 
                 if video_url:
+                    self.video_url_cache[clip_id] = video_url
                     return {
                         "video_url": video_url,
                         "title": clip["title"],
                     }
 
+                self.video_url_cache[clip_id] = None
                 return {"error": "No video URL found"}
         except Exception as e:
+            self.video_url_cache[clip_id] = None
             return {"error": str(e)}
 
     async def action_clip(self, clip_id: str, action: str) -> Dict[str, Any]:
@@ -259,6 +274,8 @@ class AppState:
     async def get_leaderboard(self) -> List[Dict[str, Any]]:
         ranked_clips: List[Dict[str, Any]] = []
         for cid, likes in self.clip_scores.items():
+            if likes == 0:
+                continue
             if cid in self.clip_metadata_store:
                 clip_info = self.clip_metadata_store[cid].copy()
                 clip_info["local_likes"] = likes
