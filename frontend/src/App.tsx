@@ -527,6 +527,7 @@ function AuthModal({ isOpen, onClose, onLogin }: { isOpen: boolean; onClose: () 
   );
 }
 
+
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('swipe');
   const [clips, setClips] = useState<Clip[]>([]);
@@ -545,6 +546,7 @@ function App() {
   const [rejectHighlight, setRejectHighlight] = useState(false);
   const [acceptHighlight, setAcceptHighlight] = useState(false);
   const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
+  const [leavingDirection, setLeavingDirection] = useState<'left' | 'right' | null>(null); // NEW: for exit animation
   const [showEmotePicker, setShowEmotePicker] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [user, setUser] = useState<User | null>(null);
@@ -686,46 +688,50 @@ function App() {
     if (!currentClip) return;
 
     isSwiping.current = true;
-    setSwipeDirection(direction);
+    setLeavingDirection(direction); // trigger exit animation
     stopAllVideos();
 
-    addSeenClipId(currentClip.id);
+    // Delay actual removal until animation completes
+    setTimeout(() => {
+      addSeenClipId(currentClip.id);
 
-    const nextClip = clips[currentIndex + 1];
-    if (nextClip && !videoUrlCache[nextClip.id]) {
-      api.getVideoUrl(nextClip.id).then((data) => {
-        if (data.video_url) videoUrlCache[nextClip.id] = data.video_url;
-      }).catch(() => {});
-    }
-
-    if (direction === 'right') {
-      if (user) {
-        api.likeClip(currentClip.id).catch(() => {});
-      } else {
-        api.legacyLikeClip(currentClip.id).catch(() => {});
+      const nextClip = clips[currentIndex + 1];
+      if (nextClip && !videoUrlCache[nextClip.id]) {
+        api.getVideoUrl(nextClip.id).then((data) => {
+          if (data.video_url) videoUrlCache[nextClip.id] = data.video_url;
+        }).catch(() => {});
       }
-    } else {
-      if (user) {
-        api.dislikeClip(currentClip.id).catch(() => {});
-      } else {
-        api.legacyDislikeClip(currentClip.id).catch(() => {});
-      }
-    }
 
-    const newIndex = currentIndex + 1;
-    if (newIndex >= clips.length - 2) {
-      api.getClips(currentCategory).then((data) => {
-        const seenIds = getSeenClipIds();
-        const newClips = data.clips.filter(c => !seenIds.has(c.id));
-        if (newClips.length > 0) {
-          setClips(prev => [...prev.filter(c => !seenIds.has(c.id)), ...newClips]);
+      if (direction === 'right') {
+        if (user) {
+          api.likeClip(currentClip.id).catch(() => {});
+        } else {
+          api.legacyLikeClip(currentClip.id).catch(() => {});
         }
-      }).catch(() => {});
-    }
+      } else {
+        if (user) {
+          api.dislikeClip(currentClip.id).catch(() => {});
+        } else {
+          api.legacyDislikeClip(currentClip.id).catch(() => {});
+        }
+      }
 
-    setCurrentIndex(newIndex);
-    setSwipeDirection(null);
-    isSwiping.current = false;
+      const newIndex = currentIndex + 1;
+      if (newIndex >= clips.length - 2) {
+        api.getClips(currentCategory).then((data) => {
+          const seenIds = getSeenClipIds();
+          const newClips = data.clips.filter(c => !seenIds.has(c.id));
+          if (newClips.length > 0) {
+            setClips(prev => [...prev.filter(c => !seenIds.has(c.id)), ...newClips]);
+          }
+        }).catch(() => {});
+      }
+
+      setCurrentIndex(newIndex);
+      setLeavingDirection(null);
+      setSwipeDirection(null);
+      isSwiping.current = false;
+    }, 320); // match CSS transition duration
   }, [clips, currentIndex, stopAllVideos, user, currentCategory]);
 
   const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
@@ -976,57 +982,75 @@ function App() {
                   <p style={{ marginTop: '10px' }}>No more clips to vote on</p>
                 </div>
               ) : (
-                visibleClips.map((clip, idx) => (
-                  <div
-                    key={clip.id}
-                    ref={idx === 0 ? cardRef : null}
-                    className={`clip-card ${idx === 0 ? 'top-card' : ''}`}
-                    style={{
-                      zIndex: 100 - idx,
-                      transform: idx === 0 && swipeDirection
-                        ? `translate(${swipeDirection === 'right' ? '150%' : '-150%'}, -100px) rotate(${swipeDirection === 'right' ? 30 : -30}deg)`
-                        : idx > 0
-                        ? `scale(${1 - idx * 0.03}) translateY(${idx * 10}px)`
-                        : undefined,
-                      opacity: idx === 0 && swipeDirection ? 0 : idx > 0 ? 1 - idx * 0.12 : 1,
-                      pointerEvents: idx === 0 ? 'auto' : 'none',
-                      transition: swipeDirection ? 'transform 0.28s ease-out, opacity 0.25s' : 'transform 0.28s ease-out, opacity 0.25s ease-out'
-                    }}
-                    onMouseDown={idx === 0 ? handleMouseDown : undefined}
-                    onTouchStart={idx === 0 ? handleMouseDown : undefined}
-                  >
-                    <ClipPreview
-                      clip={clip}
-                      onOpenTheater={() => openTheaterMode(clip.id)}
-                      isPreload={idx > 0}
+                visibleClips.map((clip, idx) => {
+                  // card-swipe exit animation: if top card and leavingDirection, animate out
+                  let cardStyle: React.CSSProperties = {
+                    zIndex: 100 - idx,
+                    pointerEvents: idx === 0 ? 'auto' : 'none',
+                    transition: 'transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.28s',
+                  };
+                  if (idx === 0 && leavingDirection) {
+                    cardStyle = {
+                      ...cardStyle,
+                      transform: `translate(${leavingDirection === 'right' ? '150%' : '-150%'}, -100px) rotate(${leavingDirection === 'right' ? 32 : -32}deg) scale(0.95)`,
+                      opacity: 0,
+                    };
+                  } else if (idx === 0 && swipeDirection) {
+                    // fallback for button-triggered swipe
+                    cardStyle = {
+                      ...cardStyle,
+                      transform: `translate(${swipeDirection === 'right' ? '150%' : '-150%'}, -100px) rotate(${swipeDirection === 'right' ? 30 : -30}deg) scale(0.95)`,
+                      opacity: 0,
+                    };
+                  } else if (idx > 0) {
+                    cardStyle = {
+                      ...cardStyle,
+                      transform: `scale(${1 - idx * 0.03}) translateY(${idx * 10}px)`,
+                      opacity: 1 - idx * 0.12,
+                    };
+                  }
+                  return (
+                    <div
+                      key={clip.id}
+                      ref={idx === 0 ? cardRef : null}
+                      className={`clip-card ${idx === 0 ? 'top-card' : ''}`}
+                      style={cardStyle}
+                      onMouseDown={idx === 0 ? handleMouseDown : undefined}
+                      onTouchStart={idx === 0 ? handleMouseDown : undefined}
                     >
-                      <div className="clip-info" style={{ pointerEvents: 'none' }}>
-                        <div className="clip-title">{clip.title}</div>
-                        <div className="creator">{clip.creator_name} • {clip.channel}</div>
-                        <div className="clip-meta">
-                          <div>
-                            <span>👁 {formatViews(clip.view_count)}</span>
-                            <span style={{ marginLeft: '8px' }}>⏱ {Math.floor(clip.duration)}s</span>
-                          </div>
-                          <div className="social-counters">
-                            <div className="social-badge">♥ <span>{clip.local_likes}</span></div>
-                            <button className="social-btn" onClick={(e) => { e.stopPropagation(); openComments(clip.id, clip.title); }}>💬 <span>{clip.comment_count}</span></button>
+                      <ClipPreview
+                        clip={clip}
+                        onOpenTheater={() => openTheaterMode(clip.id)}
+                        isPreload={idx !== 0}
+                      >
+                        <div className="clip-info" style={{ pointerEvents: 'none' }}>
+                          <div className="clip-title">{clip.title}</div>
+                          <div className="creator">{clip.creator_name} • {clip.channel}</div>
+                          <div className="clip-meta">
+                            <div>
+                              <span>👁 {formatViews(clip.view_count)}</span>
+                              <span style={{ marginLeft: '8px' }}>⏱ {Math.floor(clip.duration)}s</span>
+                            </div>
+                            <div className="social-counters">
+                              <div className="social-badge">♥ <span>{clip.local_likes}</span></div>
+                              <button className="social-btn" onClick={(e) => { e.stopPropagation(); openComments(clip.id, clip.title); }}>💬 <span>{clip.comment_count}</span></button>
+                            </div>
                           </div>
                         </div>
+                      </ClipPreview>
+                      <div className="swipe-hint left" style={{ opacity: 0 }}>
+                        <div className="aura-strings"></div>
+                        <div className="hint-text-main">NOPE</div>
+                        <div className="hint-text-bubbly">I dare you!</div>
                       </div>
-                    </ClipPreview>
-                    <div className="swipe-hint left" style={{ opacity: 0 }}>
-                      <div className="aura-strings"></div>
-                      <div className="hint-text-main">NOPE</div>
-                      <div className="hint-text-bubbly">I dare you!</div>
+                      <div className="swipe-hint right" style={{ opacity: 0 }}>
+                        <div className="aura-strings"></div>
+                        <div className="hint-text-main">LIKE</div>
+                        <div className="hint-text-bubbly">Shiny! ✨</div>
+                      </div>
                     </div>
-                    <div className="swipe-hint right" style={{ opacity: 0 }}>
-                      <div className="aura-strings"></div>
-                      <div className="hint-text-main">LIKE</div>
-                      <div className="hint-text-bubbly">Shiny! ✨</div>
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
