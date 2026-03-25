@@ -20,6 +20,9 @@ env/
 dist/
 build/
 .ruff_cache/
+sessionsHist
+# Python version
+.python-version
 
 # Environment
 .env
@@ -58,5 +61,5 @@ Thumbs.db
 nul
 ~*
 
-# Python version
-.python-version
+
+tiktok.com_cookies.txt
