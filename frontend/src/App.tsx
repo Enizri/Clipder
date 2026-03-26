@@ -630,6 +630,15 @@ function App() {
     }
   }, []);
 
+  // Debug: Log when selectedClipForAi changes
+  useEffect(() => {
+    if (selectedClipForAi) {
+      console.log('✅ selectedClipForAi SET:', selectedClipForAi.title);
+    } else {
+      console.log('❌ selectedClipForAi is NULL (no clip selected for AI editor)');
+    }
+  }, [selectedClipForAi]);
+
   useEffect(() => {
     if (activeTab === 'leaderboard') {
       loadLeaderboard();
@@ -714,8 +723,23 @@ function App() {
   };
 
   const handleAiChatSubmit = async () => {
-    if (!aiInput.trim() || !selectedClipForAi || aiLoading) return;
+    console.log('🔵 Send Button Clicked');
+    console.log('State Debug:', {
+      aiInput: aiInput.trim(),
+      aiInputTrimmed: !!aiInput.trim(),
+      selectedClipForAi: selectedClipForAi,
+      aiLoading: aiLoading,
+    });
 
+    if (!aiInput.trim() || !selectedClipForAi || aiLoading) {
+      console.log('❌ Send blocked - Reasons:');
+      if (!aiInput.trim()) console.log('   - aiInput is empty');
+      if (!selectedClipForAi) console.log('   - selectedClipForAi is null (no clip selected!)');
+      if (aiLoading) console.log('   - aiLoading is true (request in progress)');
+      return;
+    }
+
+    console.log('✅ Send proceeding...');
     const userMsg = aiInput.trim();
     setAiInput('');
     setAiLoading(true);
@@ -1407,8 +1431,18 @@ function App() {
                       
                       const clipId = e.dataTransfer?.getData('clipId');
                       const clipTitle = e.dataTransfer?.getData('clipTitle');
+                      const clipDataStr = e.dataTransfer?.getData('clipData');
                       
                       if (clipId) {
+                        // Parse the clip data and set it for AI editor
+                        const clip = clipDataStr ? JSON.parse(clipDataStr) : null;
+                        if (clip) {
+                          _setSelectedClipForAi(clip);
+                          console.log('✅ Clip dropped in AI editor, selectedClipForAi SET:', clip);
+                        } else {
+                          console.log('❌ Could not parse clip data from drop event');
+                        }
+                        
                         // Add user message (clip dropped)
                         setAiChatMessages(prev => [...prev, { role: 'user', content: `📎 ${clipTitle} (dropped for editing)` }]);
                         // Add AI response
@@ -1474,6 +1508,8 @@ function App() {
                         onDragStart={(e) => {
                           e.dataTransfer?.setData('clipId', clip.id);
                           e.dataTransfer?.setData('clipTitle', clip.title);
+                          e.dataTransfer?.setData('clipData', JSON.stringify(clip));
+                          console.log('🎬 Dragged clip:', clip);
                         }}
                             style={{
                               position: 'relative',
