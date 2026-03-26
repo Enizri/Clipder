@@ -7,7 +7,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.v1.endpoints import clips, leaderboard, admin, votes
-from backend.api.v1.endpoints import auth, following, ai_chat
+from backend.api.v1.endpoints import auth, following, ai_chat, ai_editor
 from backend.core.database import init_database
 from backend.core.state import ConnectionManager
 
@@ -52,6 +52,7 @@ app.include_router(auth.router)
 app.include_router(votes.router)
 app.include_router(following.router)
 app.include_router(ai_chat.router)
+app.include_router(ai_editor.router)
 
 
 @app.websocket("/ws/leaderboard")

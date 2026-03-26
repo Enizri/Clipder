@@ -244,24 +244,30 @@ const MiniThumb = React.memo(function MiniThumb({ clip, onOpenTheater, isHighlig
   }, [isHovering, fetchVideoUrl]);
 
   useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
     if (isHovering && videoSrc) {
-      const video = videoRef.current;
-      if (!video) return;
       if (video.readyState >= 2) {
         video.volume = volume / 100;
         video.muted = isMuted || volume === 0;
         video.play().catch(() => {});
         setIsPlaying(true);
       } else {
-        video.addEventListener('loadeddata', () => {
-          video.volume = volume / 100;
-          video.muted = isMuted || volume === 0;
-          video.play().catch(() => {});
-          setIsPlaying(true);
-        }, { once: true });
+        const handleCanPlay = () => {
+          if (videoRef.current) {
+            videoRef.current.volume = volume / 100;
+            videoRef.current.muted = isMuted || volume === 0;
+            videoRef.current.play().catch(() => {});
+            setIsPlaying(true);
+          }
+        };
+        video.addEventListener('canplay', handleCanPlay, { once: true });
+        return () => video.removeEventListener('canplay', handleCanPlay);
       }
-    } else if (videoRef.current) {
-      videoRef.current.pause();
+    } else if (!isHovering && video) {
+      video.pause();
+      video.currentTime = 0;
       setIsPlaying(false);
     }
   }, [isHovering, videoSrc, volume, isMuted]);
@@ -449,21 +455,6 @@ function EmotePicker({ onSelect, onClose }: { onSelect: (url: string, code: stri
   );
 }
 
-function HeroBanner() {
-  return (
-    <div className="hero-banner">
-      <div className="hero-inner">
-        <div>
-          <h2>Discover & Curate the Best Twitch Clips</h2>
-          <p>Swipe, like, and send clips to the upload queue — discover viral moments faster.</p>
-        </div>
-        <div>
-          <button className="btn-primary" onClick={() => { const el = document.getElementById('card-stack'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}>Start Swiping</button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function AuthModal({ isOpen, onClose, onLogin }: { isOpen: boolean; onClose: () => void; onLogin: (token: string, user: User) => void }) {
   const [isLogin, setIsLogin] = useState(true);
@@ -578,7 +569,7 @@ function App() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardClip[]>([]);
   const [prevLeaderboard, setPrevLeaderboard] = useState<Map<string, number>>(new Map());
   const [adminQueue, setAdminQueue] = useState<AdminClip[]>([]);
-  const [aiChatMessages, setAiChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
+  const [aiChatMessages, setAiChatMessages] = useState<{ _id?: number; role: 'user' | 'assistant'; content: string; thumbnail_url?: string; video_url?: string; type?: string }[]>([]);
   const [aiInput, setAiInput] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [hoveredClipId, setHoveredClipId] = useState<string | null>(null);
@@ -599,6 +590,17 @@ function App() {
   const [user, setUser] = useState<User | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [userSubscription, setUserSubscription] = useState<'free' | 'trial' | 'pro'>('free');
+  const [showCategoriesMenu, setShowCategoriesMenu] = useState(false);
+  
+  // Clip editing metadata (TODO: implement setClipEdits updates for edit tracking)
+  const [clipEdits] = useState<{
+    [clipId: string]: {
+      description?: string;
+      tags?: string[];
+      edited_title?: string;
+      edits_made: Array<{ action: string; timestamp: string; before?: string; after?: string }>;
+    };
+  }>({});
 
   const cardRef = useRef<HTMLDivElement>(null);
   const theaterVideoRef = useRef<HTMLVideoElement>(null);
@@ -615,9 +617,16 @@ function App() {
       api.getMe()
         .then(userData => {
           setUser(userData);
+          // Set subscription based on role
+          if (userData.role === 'PRO' || userData.role === 'ADMIN') {
+            setUserSubscription('pro');
+          } else {
+            setUserSubscription('free');
+          }
         })
         .catch(() => {
           localStorage.removeItem('token');
+          setUserSubscription('free');
         });
     }
 
@@ -625,10 +634,27 @@ function App() {
     if (params.get('twitch_linked') === 'true') {
       window.history.replaceState({}, '', window.location.pathname);
       api.getMe()
-        .then(userData => setUser(userData))
+        .then(userData => {
+          setUser(userData);
+          // Set subscription based on role
+          if (userData.role === 'PRO' || userData.role === 'ADMIN') {
+            setUserSubscription('pro');
+          } else {
+            setUserSubscription('free');
+          }
+        })
         .catch(() => {});
     }
   }, []);
+
+  // Update document title based on user subscription
+  useEffect(() => {
+    if (user && (user.role === 'PRO' || user.role === 'ADMIN')) {
+      document.title = 'Clipder Pro';
+    } else {
+      document.title = 'Clipder';
+    }
+  }, [user]);
 
   // Debug: Log when selectedClipForAi changes
   useEffect(() => {
@@ -643,23 +669,31 @@ function App() {
     if (activeTab === 'leaderboard') {
       loadLeaderboard();
       
-      wsRef.current = createLeaderboardSocket((updatedClips) => {
-        const newLeaderboard = updatedClips.slice(0, 10);
-        
-        const prevPositions = new Map<string, number>();
-        leaderboard.forEach((clip, idx) => {
-          prevPositions.set(clip.id, idx);
-        });
-        setPrevLeaderboard(prevPositions);
-        
-        setLeaderboard(newLeaderboard);
-        setWsConnected(true);
-      });
+      wsRef.current = createLeaderboardSocket(
+        (updatedClips) => {
+          const newLeaderboard = updatedClips.slice(0, 10);
+          
+          const prevPositions = new Map<string, number>();
+          leaderboard.forEach((clip, idx) => {
+            prevPositions.set(clip.id, idx);
+          });
+          setPrevLeaderboard(prevPositions);
+          
+          setLeaderboard(newLeaderboard);
+        },
+        () => {
+          setWsConnected(true);
+        }
+      );
 
       return () => {
         wsRef.current?.close();
         setWsConnected(false);
       };
+    } else if (activeTab === 'ai-editor') {
+      setAiChatMessages([]);
+      wsRef.current?.close();
+      setWsConnected(false);
     } else {
       wsRef.current?.close();
       setWsConnected(false);
@@ -684,10 +718,11 @@ function App() {
       }).finally(() => {
         setLoading(false);
       });
-    } else if (activeTab === 'admin') {
+    } else if (activeTab === 'ai-editor' && user && (user.role === 'PRO' || user.role === 'ADMIN')) {
+      // Only load queue if user is PRO/ADMIN
       loadAdminQueue();
     }
-  }, [activeTab, currentCategory]);
+  }, [activeTab, currentCategory, user]);
 
   useEffect(() => {
     if (theaterVideo && theaterVideoRef.current) {
@@ -714,9 +749,35 @@ function App() {
   };
 
   const loadAdminQueue = async () => {
+    if (!user || (user.role !== 'PRO' && user.role !== 'ADMIN')) {
+      console.log('ℹ️ Not PRO/ADMIN, skipping admin queue load');
+      return;
+    }
+    
     try {
-      const data = await api.getAcceptedClips();
-      setAdminQueue(data);
+      // Load user's saved clip history (not global accepted clips)
+      const response = await api.getUserClipHistory();
+      const historyClips = (response.history || []).map((item: any) => ({
+        id: item.clip_id,
+        title: item.clip_title,
+        url: item.clip_url,
+        channel: item.clip_channel,
+        thumbnail_url: item.thumbnail_url,
+        view_count: 0,
+        local_likes: 0,
+        comment_count: 0,
+      }));
+      
+      // Deduplicate by clip_id (prevent duplicate key warnings)
+      const uniqueClipsMap = new Map<string, AdminClip>();
+      historyClips.forEach((clip: AdminClip) => {
+        if (!uniqueClipsMap.has(clip.id)) {
+          uniqueClipsMap.set(clip.id, clip);
+        }
+      });
+      const uniqueClips = Array.from(uniqueClipsMap.values());
+      
+      setAdminQueue(uniqueClips);
     } catch (err) {
       console.error('Failed to load admin queue:', err);
     }
@@ -745,7 +806,7 @@ function App() {
     setAiLoading(true);
 
     // Add user message to chat
-    setAiChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setAiChatMessages(prev => [...prev, { _id: Date.now() + Math.random(), role: 'user', content: userMsg }]);
 
     try {
       const response = await fetch('/api/v1/ai/chat', {
@@ -764,10 +825,11 @@ function App() {
       }
 
       const data = await response.json();
-      setAiChatMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
+      setAiChatMessages(prev => [...prev, { _id: Date.now() + Math.random(), role: 'assistant', content: data.response }]);
     } catch (error) {
       console.error('AI chat error:', error);
       setAiChatMessages(prev => [...prev, {
+        _id: Date.now() + Math.random(),
         role: 'assistant',
         content: 'Sorry, I couldn\'t process your request. Please try again.'
       }]);
@@ -996,11 +1058,68 @@ function App() {
     setCurrentCategory(cat);
   };
 
-  const handleAddToQueue = async (clipId: string) => {
-    await api.addToQueue(clipId);
-    loadAdminQueue();
-    alert('✅ Sent to Admin Upload Queue!');
+  const handleRemoveFromQueue = async (clipId: string) => {
+    // Remove from queue UI
+    setAdminQueue(prev => prev.filter(c => c.id !== clipId));
+    
+    // Try to remove from database history
+    try {
+      await api.deleteClipFromHistory(clipId);
+      console.log('✓ Clip removed from history');
+    } catch (error) {
+      console.error('Error removing from history:', error);
+    }
   };
+
+  const handleAddToQueue = async (clip: any) => {
+    // Check if user is PRO
+    if (!user || (user.role !== 'PRO' && user.role !== 'ADMIN')) {
+      alert('❌ Only PRO users can save clips!');
+      return;
+    }
+
+    // Prepare chat messages with timestamps
+    const chatWithTimestamps = aiChatMessages.map(msg => ({
+      role: msg.role,
+      content: msg.content,
+      timestamp: new Date().toISOString(),
+    }));
+    
+    // Get any edits tracked for this clip
+    const clipMetadata = clipEdits[clip.id] || { edits_made: [] };
+    
+    try {
+      // Save to history
+      await api.saveClipToHistory({
+        clip_id: clip.id,
+        clip_title: clip.title,
+        clip_url: clip.url,
+        clip_channel: clip.channel,
+        thumbnail_url: clip.thumbnail_url,
+        clip_description: clipMetadata.description,
+        clip_tags: clipMetadata.tags,
+        edited_title: clipMetadata.edited_title,
+        chat_messages: chatWithTimestamps,
+        edit_history: clipMetadata.edits_made,
+      });
+    } catch (error) {
+      console.error('Error saving:', error);
+    }
+    
+    // Add to queue immediately (deduplicate)
+    setAdminQueue(prev => {
+      const exists = prev.some(c => c.id === clip.id);
+      if (exists) {
+        console.log('⚠️  Clip already in queue, not adding again');
+        return prev;
+      }
+      return [clip, ...prev];
+    });
+    
+    setAiChatMessages([]);
+  };
+
+
 
   // const handleRemoveFromQueue = async (clipId: string) => {
   //   await api.removeFromQueue(clipId);
@@ -1009,11 +1128,20 @@ function App() {
 
   const handleLogin = (_token: string, userData: User) => {
     setUser(userData);
+    // Set subscription based on user role
+    if (userData.role === 'PRO' || userData.role === 'ADMIN') {
+      setUserSubscription('pro');
+    } else {
+      setUserSubscription('free');
+    }
   };
 
   const handleLogout = () => {
     localStorage.removeItem('token');
     setUser(null);
+    setUserSubscription('free');
+    // Redirect to main page (swipe tab)
+    setActiveTab('swipe');
   };
 
   const visibleClips = useMemo(() => clips.slice(currentIndex, Math.min(currentIndex + 3, clips.length)), [clips, currentIndex]);
@@ -1021,19 +1149,28 @@ function App() {
   return (
     <>
       <header>
-        <h1>Clip<span className="logo-accent">der</span> Pro</h1>
+        <h1>
+          Clip<span className="logo-accent">der</span>
+          {(user && (user.role === 'PRO' || user.role === 'ADMIN')) && ' Pro'}
+        </h1>
         <nav className="nav-tabs">
-          <button className={`tab-btn ${activeTab === 'swipe' ? 'active' : ''}`} onClick={() => { setActiveTab('swipe'); closeComments(); stopAllVideos(); }}>Swipe & Vote</button>
+          <button className={`tab-btn ${activeTab === 'swipe' ? 'active' : ''}`} onClick={() => { setActiveTab('swipe'); setShowCategoriesMenu(false); closeComments(); stopAllVideos(); }}>Swipe & Vote</button>
           <button className={`tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}`} onClick={() => { setActiveTab('leaderboard'); closeComments(); loadLeaderboard(); stopAllVideos(); }}>
             Leaderboard {wsConnected && <span className="ws-indicator"></span>}
           </button>
-          <button className={`tab-btn ${activeTab === 'ai-editor' ? 'active' : ''}`} onClick={() => { setActiveTab('ai-editor'); closeComments(); loadAdminQueue(); stopAllVideos(); }}>🚀 AI Editor</button>
+          <button className={`tab-btn ${activeTab === 'ai-editor' ? 'active' : ''}`} onClick={() => { setActiveTab('ai-editor'); closeComments(); stopAllVideos(); }}>🚀 AI Editor</button>
           <button className={`tab-btn ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => { setActiveTab('profile'); closeComments(); stopAllVideos(); }}>Profile</button>
         </nav>
         <div className="auth-section">
           {user ? (
             <div className="user-menu">
               <span>{user.username}</span>
+              {(user.role === 'PRO' || user.role === 'ADMIN') && (
+                <span className="pro-badge">
+                  <span className="pro-badge-text">👑</span>
+                  <span className="pro-badge-label">{user.role}</span>
+                </span>
+              )}
               {user.twitch_username && <span className="twitch-badge">📺 {user.twitch_username}</span>}
               <button onClick={handleLogout}>Logout</button>
             </div>
@@ -1047,19 +1184,44 @@ function App() {
 
       <div className="app-container">
         <div id="swipe" className={`view-section ${activeTab === 'swipe' ? 'active' : ''}`}>
-          <div style={{ width: '100%', padding: '0 5%' }}>
-            <HeroBanner />
-          </div>
-          <div className="category-menu">
-            {categories.map((cat) => (
-              <button key={cat} className={`cat-pill ${currentCategory === cat ? 'active' : ''}`} onClick={(e) => handleCategoryChange(cat, e)}>
-                {cat}
-              </button>
-            ))}
-          </div>
+          <div className="swipe-layout">
+            {/* LEFT SIDEBAR */}
+            <div className="swipe-sidebar">
+              <div className="streamers-section">
+                <h4>Currently Viewing</h4>
+                <p>{currentCategory}</p>
+              </div>
 
-          <div className="swipe-container">
-            <div className="action-buttons">
+              <button 
+                className={`categories-toggle ${showCategoriesMenu ? 'open' : ''}`}
+                onClick={() => setShowCategoriesMenu(!showCategoriesMenu)}
+                title="Browse categories"
+              >
+                <span>All Categories</span>
+                <span className="hamburger-icon">☰</span>
+              </button>
+
+              <div className={`categories-dropdown ${showCategoriesMenu ? 'open' : ''}`}>
+                <div className="categories-list">
+                  {categories.map((cat) => (
+                    <button 
+                      key={cat}
+                      className={`category-item ${currentCategory === cat ? 'active' : ''}`}
+                      onClick={(e) => {
+                        handleCategoryChange(cat, e as any);
+                        setShowCategoriesMenu(false);
+                      }}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT MAIN CONTENT */}
+            <div className="swipe-container">
+              {/* LEFT ARROW */}
               <button className={`btn-side btn-reject ${rejectHighlight ? 'highlight' : ''}`} onClick={() => handleSwipe('left')} title="Skip">
                 <svg viewBox="0 0 120 160" fill="none">
                   <g opacity="0.15"><circle cx="25" cy="80" r="18" fill="currentColor"/><circle cx="60" cy="65" r="8" fill="currentColor"/><circle cx="45" cy="100" r="5" fill="currentColor"/><circle cx="80" cy="75" r="3" fill="currentColor"/><circle cx="35" cy="55" r="4" fill="currentColor"/><circle cx="55" cy="110" r="3" fill="currentColor"/></g>
@@ -1071,6 +1233,91 @@ function App() {
                   <text x="60" y="42" fontFamily="'Arial Black', Impact, sans-serif" fontSize="20" fontWeight="900" fill="currentColor" opacity="0.7" letterSpacing="3" transform="rotate(-8, 60, 42)">SKIP</text>
                 </svg>
               </button>
+
+              {/* CARD */}
+              <div id="card-stack">
+                {loading ? (
+                  <div id="loading">
+                    <div className="video-loading active" style={{ position: 'relative', top: 'auto', left: 'auto', transform: 'none' }}></div>
+                    <p style={{ marginTop: '16px', fontWeight: 600, color: '#888' }}>Loading...</p>
+                  </div>
+                ) : currentIndex >= clips.length ? (
+                  <div className="empty-msg">
+                    <h2>All Caught Up</h2>
+                    <p style={{ marginTop: '10px' }}>No more clips to vote on</p>
+                  </div>
+                ) : (
+                  visibleClips.map((clip, idx) => {
+                    let cardStyle: React.CSSProperties = {
+                      zIndex: 100 - idx,
+                      pointerEvents: idx === 0 ? 'auto' : 'none',
+                      transition: 'transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.28s',
+                    };
+                    if (idx === 0 && leavingDirection) {
+                      cardStyle = {
+                        ...cardStyle,
+                        transform: `translate(${leavingDirection === 'right' ? '150%' : '-150%'}, -100px) rotate(${leavingDirection === 'right' ? 32 : -32}deg) scale(0.95)`,
+                        opacity: 0,
+                      };
+                    } else if (idx === 0 && swipeDirection) {
+                      cardStyle = {
+                        ...cardStyle,
+                        transform: `translate(${swipeDirection === 'right' ? '150%' : '-150%'}, -100px) rotate(${swipeDirection === 'right' ? 30 : -30}deg) scale(0.95)`,
+                        opacity: 0,
+                      };
+                    } else if (idx > 0) {
+                      cardStyle = {
+                        ...cardStyle,
+                        transform: `scale(${1 - idx * 0.03}) translateY(${idx * 10}px)`,
+                        opacity: 1 - idx * 0.12,
+                      };
+                    }
+                    return (
+                      <div
+                        key={clip.id}
+                        ref={idx === 0 ? cardRef : null}
+                        className={`clip-card ${idx === 0 ? 'top-card' : ''}`}
+                        style={cardStyle}
+                        onMouseDown={idx === 0 ? handleMouseDown : undefined}
+                        onTouchStart={idx === 0 ? handleMouseDown : undefined}
+                      >
+                        <ClipPreview
+                          clip={clip}
+                          onOpenTheater={() => openTheaterMode(clip.id)}
+                          isPreload={idx !== 0}
+                        >
+                          <div className="clip-info" style={{ pointerEvents: 'none' }}>
+                            <div className="clip-title">{clip.title}</div>
+                            <div className="creator">{clip.creator_name} • {clip.channel}</div>
+                            <div className="clip-meta">
+                              <div>
+                                <span>👁 {formatViews(clip.view_count)}</span>
+                                <span style={{ marginLeft: '8px' }}>⏱ {Math.floor(clip.duration)}s</span>
+                              </div>
+                              <div className="social-counters">
+                                <div className="social-badge">♥ <span>{clip.local_likes}</span></div>
+                                <button className="social-btn" onClick={(e) => { e.stopPropagation(); openComments(clip.id, clip.title); }}>💬 <span>{clip.comment_count}</span></button>
+                              </div>
+                            </div>
+                          </div>
+                        </ClipPreview>
+                        <div className="swipe-hint left" style={{ opacity: 0 }}>
+                          <div className="aura-strings"></div>
+                          <div className="hint-text-main">NOPE</div>
+                          <div className="hint-text-bubbly">I dare you!</div>
+                        </div>
+                        <div className="swipe-hint right" style={{ opacity: 0 }}>
+                          <div className="aura-strings"></div>
+                          <div className="hint-text-main">LIKE</div>
+                          <div className="hint-text-bubbly">Shiny! ✨</div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* RIGHT ARROW */}
               <button className={`btn-side btn-accept ${acceptHighlight ? 'highlight' : ''}`} onClick={() => handleSwipe('right')} title="Like">
                 <svg viewBox="0 0 120 160" fill="none">
                   <g opacity="0.15"><circle cx="95" cy="80" r="18" fill="currentColor"/><circle cx="60" cy="65" r="8" fill="currentColor"/><circle cx="75" cy="100" r="5" fill="currentColor"/><circle cx="40" cy="75" r="3" fill="currentColor"/><circle cx="85" cy="55" r="4" fill="currentColor"/><circle cx="65" cy="110" r="3" fill="currentColor"/></g>
@@ -1082,90 +1329,6 @@ function App() {
                   <text x="60" y="42" fontFamily="'Arial Black', Impact, sans-serif" fontSize="20" fontWeight="900" fill="currentColor" opacity="0.7" letterSpacing="3" textAnchor="middle" transform="rotate(8, 60, 42)">LIKE</text>
                 </svg>
               </button>
-            </div>
-
-            <div id="card-stack">
-              {loading ? (
-                <div id="loading">
-                  <div className="video-loading active" style={{ position: 'relative', top: 'auto', left: 'auto', transform: 'none' }}></div>
-                  <p style={{ marginTop: '16px', fontWeight: 600, color: '#888' }}>Loading...</p>
-                </div>
-              ) : currentIndex >= clips.length ? (
-                <div className="empty-msg">
-                  <h2>All Caught Up</h2>
-                  <p style={{ marginTop: '10px' }}>No more clips to vote on</p>
-                </div>
-              ) : (
-                visibleClips.map((clip, idx) => {
-                  // card-swipe exit animation: if top card and leavingDirection, animate out
-                  let cardStyle: React.CSSProperties = {
-                    zIndex: 100 - idx,
-                    pointerEvents: idx === 0 ? 'auto' : 'none',
-                    transition: 'transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.28s',
-                  };
-                  if (idx === 0 && leavingDirection) {
-                    cardStyle = {
-                      ...cardStyle,
-                      transform: `translate(${leavingDirection === 'right' ? '150%' : '-150%'}, -100px) rotate(${leavingDirection === 'right' ? 32 : -32}deg) scale(0.95)`,
-                      opacity: 0,
-                    };
-                  } else if (idx === 0 && swipeDirection) {
-                    // fallback for button-triggered swipe
-                    cardStyle = {
-                      ...cardStyle,
-                      transform: `translate(${swipeDirection === 'right' ? '150%' : '-150%'}, -100px) rotate(${swipeDirection === 'right' ? 30 : -30}deg) scale(0.95)`,
-                      opacity: 0,
-                    };
-                  } else if (idx > 0) {
-                    cardStyle = {
-                      ...cardStyle,
-                      transform: `scale(${1 - idx * 0.03}) translateY(${idx * 10}px)`,
-                      opacity: 1 - idx * 0.12,
-                    };
-                  }
-                  return (
-                    <div
-                      key={clip.id}
-                      ref={idx === 0 ? cardRef : null}
-                      className={`clip-card ${idx === 0 ? 'top-card' : ''}`}
-                      style={cardStyle}
-                      onMouseDown={idx === 0 ? handleMouseDown : undefined}
-                      onTouchStart={idx === 0 ? handleMouseDown : undefined}
-                    >
-                      <ClipPreview
-                        clip={clip}
-                        onOpenTheater={() => openTheaterMode(clip.id)}
-                        isPreload={idx !== 0}
-                      >
-                        <div className="clip-info" style={{ pointerEvents: 'none' }}>
-                          <div className="clip-title">{clip.title}</div>
-                          <div className="creator">{clip.creator_name} • {clip.channel}</div>
-                          <div className="clip-meta">
-                            <div>
-                              <span>👁 {formatViews(clip.view_count)}</span>
-                              <span style={{ marginLeft: '8px' }}>⏱ {Math.floor(clip.duration)}s</span>
-                            </div>
-                            <div className="social-counters">
-                              <div className="social-badge">♥ <span>{clip.local_likes}</span></div>
-                              <button className="social-btn" onClick={(e) => { e.stopPropagation(); openComments(clip.id, clip.title); }}>💬 <span>{clip.comment_count}</span></button>
-                            </div>
-                          </div>
-                        </div>
-                      </ClipPreview>
-                      <div className="swipe-hint left" style={{ opacity: 0 }}>
-                        <div className="aura-strings"></div>
-                        <div className="hint-text-main">NOPE</div>
-                        <div className="hint-text-bubbly">I dare you!</div>
-                      </div>
-                      <div className="swipe-hint right" style={{ opacity: 0 }}>
-                        <div className="aura-strings"></div>
-                        <div className="hint-text-main">LIKE</div>
-                        <div className="hint-text-bubbly">Shiny! ✨</div>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
             </div>
           </div>
         </div>
@@ -1211,7 +1374,9 @@ function App() {
                           <span>{clip.channel}</span>
                         </div>
                       </div>
-                      <button className="btn-small btn-outline" onClick={() => handleAddToQueue(clip.id)}>+ Send to Queue</button>
+                      {user && (user.role === 'PRO' || user.role === 'ADMIN') && (
+                        <button className="btn-small btn-outline" onClick={() => handleAddToQueue(clip)}>+ Send to Queue</button>
+                      )}
                     </div>
                   );
                 })}
@@ -1404,30 +1569,29 @@ function App() {
                   
                   {/* Chat Panel */}
                   <div 
+                    className="ai-chat-panel"
                     style={{ 
-                      background: 'rgba(147, 51, 234, 0.1)', 
+                      background: 'rgba(30, 30, 40, 0.08)', 
                       borderRadius: '14px', 
-                      border: '1px solid rgba(147, 51, 234, 0.2)', 
+                      border: '1px solid rgba(100, 100, 120, 0.2)', 
                       padding: '20px', 
                       display: 'flex', 
                       flexDirection: 'column', 
                       gap: '16px',
                       flex: 1,
-                      minHeight: 0
+                      minHeight: 0,
+                      backdropFilter: 'blur(2px)'
                     }}
                     onDragOver={(e) => {
                       e.preventDefault();
-                      e.currentTarget.style.background = 'rgba(147, 51, 234, 0.2)';
-                      e.currentTarget.style.borderColor = 'rgba(147, 51, 234, 0.6)';
+                      (e.currentTarget as HTMLElement).classList.add('drop-active');
                     }}
                     onDragLeave={(e) => {
-                      e.currentTarget.style.background = 'rgba(147, 51, 234, 0.1)';
-                      e.currentTarget.style.borderColor = 'rgba(147, 51, 234, 0.2)';
+                      (e.currentTarget as HTMLElement).classList.remove('drop-active');
                     }}
                     onDrop={(e) => {
                       e.preventDefault();
-                      e.currentTarget.style.background = 'rgba(147, 51, 234, 0.1)';
-                      e.currentTarget.style.borderColor = 'rgba(147, 51, 234, 0.2)';
+                      (e.currentTarget as HTMLElement).classList.remove('drop-active');
                       
                       const clipId = e.dataTransfer?.getData('clipId');
                       const clipTitle = e.dataTransfer?.getData('clipTitle');
@@ -1444,27 +1608,76 @@ function App() {
                         }
                         
                         // Add user message (clip dropped)
-                        setAiChatMessages(prev => [...prev, { role: 'user', content: `📎 ${clipTitle} (dropped for editing)` }]);
+                        setAiChatMessages(prev => [...prev, { _id: Date.now() + Math.random(), role: 'user', content: clip?.title || clipTitle, thumbnail_url: clip?.thumbnail_url, video_url: clip?.url, type: 'clip' }]);
                         // Add AI response
                         setTimeout(() => {
-                          setAiChatMessages(prev => [...prev, { role: 'assistant', content: 'How can I make you money today? ;)' }]);
+                          setAiChatMessages(prev => [...prev, { _id: Date.now() + Math.random(), role: 'assistant', content: 'How can I make you money today? ;)' }]);
                         }, 800);
                       }
                     }}
                   >
-                    <h3 style={{ color: '#d8b4fe' }}>🤖 Your AI Coach</h3>
-                    
                     <div style={{ flex: 1, background: 'rgba(0, 0, 0, 0.2)', borderRadius: '8px', padding: '16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                       {aiChatMessages.length === 0 ? (
                         <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.5)', margin: 'auto', fontSize: '0.95em' }}>
                           💡 Drag a clip from the right to start editing!
                         </div>
                       ) : (
-                        aiChatMessages.map((msg, idx) => (
-                          <div key={idx} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                            <div style={{ background: msg.role === 'user' ? 'linear-gradient(135deg, #9333ea, #ec4899)' : 'rgba(59, 130, 246, 0.2)', color: 'white', padding: '12px 14px', borderRadius: '12px', maxWidth: '75%', wordWrap: 'break-word' }}>
-                              {msg.content}
-                            </div>
+                        aiChatMessages.map((msg: any) => (
+                          <div key={msg._id || `msg-${Date.now()}`} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', alignItems: 'flex-start', gap: '8px' }}>
+                            {msg.type === 'clip' && msg.thumbnail_url ? (
+                              <div style={{ position: 'relative' }} onMouseEnter={(e) => {
+                                const btn = e.currentTarget.querySelector('button');
+                                if (btn) btn.style.opacity = '1';
+                                const video = e.currentTarget.querySelector('video') as HTMLVideoElement;
+                                if (video && msg.video_url) {
+                                  video.src = msg.video_url;
+                                  video.play();
+                                }
+                              }} onMouseLeave={(e) => {
+                                const btn = e.currentTarget.querySelector('button');
+                                if (btn) btn.style.opacity = '0';
+                                const video = e.currentTarget.querySelector('video') as HTMLVideoElement;
+                                if (video) {
+                                  video.pause();
+                                  video.currentTime = 0;
+                                  video.src = '';
+                                }
+                              }}>
+                                <div style={{ maxWidth: '280px', overflow: 'hidden', borderRadius: '12px', border: '1px solid rgba(100, 100, 120, 0.2)' }}>
+                                  <video 
+                                    poster={msg.thumbnail_url}
+                                    style={{ width: '100%', height: 'auto', display: 'block', borderRadius: '10px', cursor: 'pointer' }}
+                                  />
+                                  <div style={{ background: 'rgba(30, 30, 40, 0.5)', backdropFilter: 'blur(2px)', color: 'rgba(255, 255, 255, 0.8)', padding: '8px 12px', fontSize: '0.85em', textAlign: 'center' }}>
+                                    {msg.content}
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    setAiChatMessages(prev => {
+                                      const updated = prev.filter((m) => m._id !== msg._id);
+                                      return updated;
+                                    });
+                                    setTimeout(() => {
+                                      setAiChatMessages(prev => [...prev, { role: 'assistant', content: "Don't worry I'm always here 😏 (toxic boss vibes)" }]);
+                                    }, 500);
+                                    setTimeout(() => {
+                                      setAiChatMessages([]);
+                                    }, 5500);
+                                  }}
+                                  style={{ position: 'absolute', top: '4px', right: '4px', width: '20px', height: '20px', background: 'transparent', border: 'none', color: 'rgba(255, 255, 255, 0.4)', cursor: 'pointer', fontSize: '0.9em', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, opacity: 0, transition: 'opacity 0.2s ease, color 0.2s ease' }}
+                                  onMouseEnter={(e) => e.currentTarget.style.color = 'rgba(255, 255, 255, 0.8)'}
+                                  onMouseLeave={(e) => e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)'}
+                                  title="Undo clip"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{ background: 'rgba(59, 130, 246, 0.08)', backdropFilter: 'blur(2px)', color: 'white', padding: '12px 14px', borderRadius: '12px', maxWidth: '75%', wordWrap: 'break-word' }}>
+                                {msg.content}
+                              </div>
+                            )}
                           </div>
                         ))
                       )}
@@ -1491,8 +1704,8 @@ function App() {
               </div>
 
               {/* QUEUE SECTION - RIGHT SIDE (SEPARATE DIV) */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', height: 'calc(100vh - 80px)', width: '320px', background: 'rgba(0, 0, 0, 0.8)', borderRadius: '14px', border: '1px solid rgba(0, 0, 0, 0.6)', padding: '16px', overflowY: 'auto', flexShrink: 0 }}>
-                <h3 style={{ color: '#f472b6', margin: 0, fontSize: '0.95em' }}>📺 Queue</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', height: 'calc(100vh - 80px)', width: '320px', background: 'rgba(30, 30, 40, 0.15)', borderRadius: '14px', border: '1px solid rgba(100, 100, 120, 0.15)', padding: '16px', overflowY: 'auto', flexShrink: 0, position: 'relative', backdropFilter: 'blur(2px)' }}>
+                <h3 style={{ color: '#f472b6', margin: 0, fontSize: '0.95em', position: 'sticky', top: 0, zIndex: 10 }}>📺 Queue</h3>
                 
                 {adminQueue.length === 0 ? (
                   <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.4)', padding: '40px 10px', fontSize: '0.85em' }}>
@@ -1500,16 +1713,114 @@ function App() {
                     <div>Send clips</div>
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingTop: '60px' }}>
                     {adminQueue.map((clip: AdminClip) => (
                       <div
                         key={clip.id}
-                        draggable
-                        onDragStart={(e) => {
-                          e.dataTransfer?.setData('clipId', clip.id);
-                          e.dataTransfer?.setData('clipTitle', clip.title);
-                          e.dataTransfer?.setData('clipData', JSON.stringify(clip));
-                          console.log('🎬 Dragged clip:', clip);
+                        onMouseDown={(e) => {
+                          if ((e.target as HTMLElement).closest('.hover-preview')) return;
+                          
+                          const element = e.currentTarget as HTMLElement;
+                          const rect = element.getBoundingClientRect();
+                          const offsetX = e.clientX - rect.left;
+                          const offsetY = e.clientY - rect.top;
+
+                          // Create floating drag element
+                          const dragElement = element.cloneNode(true) as HTMLElement;
+                          dragElement.style.position = 'fixed';
+                          dragElement.style.pointerEvents = 'none';
+                          dragElement.style.zIndex = '10000';
+                          dragElement.style.width = rect.width + 'px';
+                          dragElement.style.height = rect.height + 'px';
+                          dragElement.style.left = e.clientX - offsetX + 'px';
+                          dragElement.style.top = e.clientY - offsetY + 'px';
+                          dragElement.style.cursor = 'grabbing';
+                          dragElement.style.boxShadow = '0 20px 60px rgba(236, 72, 153, 0.8)';
+                          dragElement.style.transform = 'scale(1.1)';
+                          dragElement.style.opacity = '0.95';
+                          
+                          // Mute videos in the dragged element only
+                          const dragVideos = dragElement.querySelectorAll('video');
+                          dragVideos.forEach(video => {
+                            (video as HTMLVideoElement).muted = true;
+                          });
+                          
+                          document.body.appendChild(dragElement);
+
+                          element.style.opacity = '0.2';
+
+                          const handleMouseMove = (moveE: MouseEvent) => {
+                            dragElement.style.left = moveE.clientX - offsetX + 'px';
+                            dragElement.style.top = moveE.clientY - offsetY + 'px';
+                            
+                            // Check if hovering over chat panel
+                            const chatPanel = document.querySelector('.ai-chat-panel') as HTMLElement;
+                            if (chatPanel) {
+                              const chatRect = chatPanel.getBoundingClientRect();
+                              const isOverChat = 
+                                moveE.clientX >= chatRect.left && moveE.clientX <= chatRect.right &&
+                                moveE.clientY >= chatRect.top && moveE.clientY <= chatRect.bottom;
+                              
+                              if (isOverChat) {
+                                chatPanel.classList.add('drag-over-active');
+                                dragElement.style.boxShadow = '0 20px 60px rgba(100, 150, 200, 0.6)';
+                              } else {
+                                chatPanel.classList.remove('drag-over-active');
+                                dragElement.style.boxShadow = '0 20px 60px rgba(236, 72, 153, 0.8)';
+                              }
+                            }
+                          };
+
+                          const handleMouseUp = (upE: MouseEvent) => {
+                            document.removeEventListener('mousemove', handleMouseMove);
+                            document.removeEventListener('mouseup', handleMouseUp);
+
+                            const chatPanel = document.querySelector('.ai-chat-panel') as HTMLElement;
+                            if (chatPanel) {
+                              chatPanel.classList.remove('drag-over-active');
+                            }
+
+                            // Restore audio to original element's hover preview if visible
+                            const hoverPreview = element.querySelector('.hover-preview video') as HTMLVideoElement;
+                            if (hoverPreview) {
+                              hoverPreview.muted = false;
+                            }
+
+                            let droppedInChat = false;
+
+                            if (chatPanel) {
+                              const chatRect = chatPanel.getBoundingClientRect();
+                              if (
+                                upE.clientX >= chatRect.left && upE.clientX <= chatRect.right &&
+                                upE.clientY >= chatRect.top && upE.clientY <= chatRect.bottom
+                              ) {
+                                droppedInChat = true;
+                                _setSelectedClipForAi(clip);
+                                setAiChatMessages(prev => [...prev, { role: 'user', content: clip.title, thumbnail_url: clip.thumbnail_url, type: 'clip' }]);
+                                setTimeout(() => {
+                                  setAiChatMessages(prev => [...prev, { role: 'assistant', content: 'How can I make you money today? ;)' }]);
+                                }, 800);
+                                dragElement.style.opacity = '0';
+                              }
+                            }
+
+                            if (!droppedInChat) {
+                              // Spring back to original position
+                              dragElement.style.transition = 'all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)';
+                              dragElement.style.left = rect.left + 'px';
+                              dragElement.style.top = rect.top + 'px';
+                              dragElement.style.transform = 'scale(1)';
+                              dragElement.style.opacity = '0.3';
+                            }
+
+                            setTimeout(() => {
+                              dragElement.remove();
+                              element.style.opacity = '1';
+                            }, 500);
+                          };
+
+                          document.addEventListener('mousemove', handleMouseMove);
+                          document.addEventListener('mouseup', handleMouseUp);
                         }}
                             style={{
                               position: 'relative',
@@ -1517,7 +1828,7 @@ function App() {
                               overflow: 'hidden',
                               border: '2px solid rgba(236, 72, 153, 0.4)',
                               cursor: 'grab',
-                              transition: 'all 0.3s ease',
+                              transition: 'opacity 0.2s ease',
                               background: 'rgba(0, 0, 0, 0.5)',
                               height: '85px',
                               backgroundImage: `url(${clip.thumbnail_url})`,
@@ -1564,47 +1875,39 @@ function App() {
                               </div>
                             </div>
 
-                            {/* Hover video preview */}
-                            {hoveredClipId === clip.id && (
-                              <div style={{
+                            {/* Remove button (X) */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveFromQueue(clip.id);
+                              }}
+                              style={{
                                 position: 'absolute',
-                                top: 0,
-                                left: 0,
-                                width: '100%',
-                                height: '100%',
-                                background: 'rgba(0, 0, 0, 0.95)',
+                                top: '4px',
+                                right: '4px',
+                                width: '22px',
+                                height: '22px',
+                                background: 'rgba(239, 68, 68, 0.9)',
+                                border: 'none',
+                                borderRadius: '50%',
+                                color: 'white',
+                                cursor: 'pointer',
+                                fontSize: '14px',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                borderRadius: '10px',
-                                zIndex: 10,
-                                flexDirection: 'column'
-                              }}>
-                                {hoveredClipVideoUrl ? (
-                                  <>
-                                    <video 
-                                      ref={(el) => { if (el) hoverVideoRefs.current[clip.id] = el; }}
-                                      src={hoveredClipVideoUrl}
-                                      style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '10px' }}
-                                      muted
-                                      loop
-                                      autoPlay
-                                    />
-                                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)', padding: '8px 6px', color: 'white' }}>
-                                      <div style={{ fontSize: '0.6em', lineHeight: '1.1', maxHeight: '30px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                        {clip.title}
-                                      </div>
-                                    </div>
-                                  </>
-                                ) : (
-                                  <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.6)' }}>
-                                    <div style={{ fontSize: '1.2em', marginBottom: '2px' }}>⏳</div>
-                                    <div style={{ fontSize: '0.6em' }}>Loading...</div>
-                                  </div>
-                                )}
-                              </div>
-                            )}
+                                padding: 0,
+                                zIndex: 100,
+                                transition: 'all 0.2s ease'
+                              }}
+                              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(239, 68, 68, 1)')}
+                              onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(239, 68, 68, 0.9)')}
+                              title="Remove from queue"
+                            >
+                              ✕
+                            </button>
                           </div>
+
                         ))}
                       </div>
                     )}

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 from backend.core.database import Base
-from backend.models import User, Clip, Vote, UserStreamer
+from backend.models import User, Clip, Vote, UserStreamer, UserClipHistory
 
 config = context.config
 

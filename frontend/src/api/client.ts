@@ -154,14 +154,48 @@ export const api = {
 
   searchGifs: (query: string, limit?: number): Promise<GifResponse> =>
     fetchJson<GifResponse>(`${API_BASE}/gifs?q=${encodeURIComponent(query)}${limit ? `&limit=${limit}` : ''}`),
+
+  // AI Editor clip history (PRO only)
+  saveClipToHistory: (data: {
+    clip_id: string;
+    clip_title: string;
+    clip_url: string;
+    clip_channel: string;
+    thumbnail_url?: string;
+    clip_description?: string;
+    clip_tags?: string[];
+    edited_title?: string;
+    chat_messages?: Array<{ role: string; content: string; timestamp: string }>;
+    edit_history?: Array<{ action: string; timestamp: string; before?: string; after?: string }>;
+  }) =>
+    fetchJson(`${API_BASE}/v1/ai-editor/history/save`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  getUserClipHistory: (): Promise<any> =>
+    fetchJson(`${API_BASE}/v1/ai-editor/history`),
+
+  deleteClipFromHistory: (clipId: string): Promise<any> =>
+    fetchJson(`${API_BASE}/v1/ai-editor/history/clip/${clipId}`, {
+      method: 'DELETE',
+    }),
+
+  clearAllHistory: (): Promise<any> =>
+    fetchJson(`${API_BASE}/v1/ai-editor/history/clear-all`, {
+      method: 'DELETE',
+    }),
 };
 
 // WebSocket for live leaderboard updates
-export function createLeaderboardSocket(onUpdate: (clips: LeaderboardClip[]) => void) {
+export function createLeaderboardSocket(onUpdate: (clips: LeaderboardClip[]) => void, onConnect?: () => void) {
   const ws = new WebSocket(`${WS_BASE}/ws/leaderboard`);
   
   ws.onopen = () => {
     console.log('WebSocket connected');
+    if (onConnect) {
+      onConnect();
+    }
   };
 
   ws.onmessage = (event) => {
