@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { api, createLeaderboardSocket } from './api/client';
 import type { Clip, LeaderboardClip, AdminClip, Comment, EmoteResponse, GifResponse, User } from './types';
+import { DemoVideo } from './DemoVideo';
 
 type Tab = 'swipe' | 'leaderboard' | 'admin' | 'profile' | 'ai-editor';
 type EmoteTab = 'twitch' | 'bttv' | '7tv' | 'gifs';
@@ -1199,12 +1200,20 @@ function App() {
           
           {userSubscription === 'free' ? (
             // PRICING SECTION FOR FREE USERS
-            <div style={{ width: '100%', maxWidth: '1100px' }}>
+            <div style={{ width: '100%', maxWidth: '1400px' }}>
               <div className="pricing-hero">
                 <h2>🚀 AI Editor Pro</h2>
                 <p>Transform your clips with AI-powered editing suggestions. Get pro-level edits in seconds, not hours.</p>
               </div>
 
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px', alignItems: 'start', marginBottom: '40px' }}>
+                {/* DEMO VIDEO */}
+                <div>
+                  <DemoVideo />
+                </div>
+
+                {/* PRICING CARDS ON RIGHT */}
+                <div>
               <div className="pricing-cards">
             {/* FREE TRIAL CARD */}
             <div className="pricing-card">
@@ -1333,6 +1342,8 @@ function App() {
               </button>
             </div>
           </div>
+                </div>
+              </div>
 
           {/* FOOTER CTA */}
           <div className="pricing-footer">
@@ -1342,182 +1353,226 @@ function App() {
             </div>
           ) : (
             // AI CHAT INTERFACE FOR PRO/TRIAL USERS
-            <div style={{ width: '100%', maxWidth: '1200px', height: '100%' }}>
-              <h2 style={{ marginBottom: '20px', textAlign: 'center' }}>✨ AI Editor Playground</h2>
-              
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', height: 'calc(100vh - 200px)' }}>
-                {/* Left Panel - Chat */}
-                <div style={{ background: 'rgba(147, 51, 234, 0.1)', borderRadius: '14px', border: '1px solid rgba(147, 51, 234, 0.2)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  <h3 style={{ color: '#d8b4fe' }}>🤖 Your AI Coach</h3>
-                  <select style={{ padding: '10px', background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(147, 51, 234, 0.3)', borderRadius: '8px', color: 'white' }}>
-                    <option>Select a clip...</option>
-                    {adminQueue.map((clip: AdminClip) => (
-                      <option key={clip.id} value={clip.id}>{clip.title}</option>
-                    ))}
-                  </select>
+            <div style={{ width: '100%', height: '100%', display: 'flex', gap: '16px', position: 'relative', padding: '20px' }}>
+              {/* CHAT SECTION - LEFT SIDE */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+                <video
+                  src="/videos/maya.mp4"
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                    opacity: 0.15,
+                    zIndex: 0,
+                    pointerEvents: 'none',
+                    borderRadius: '14px'
+                  }}
+                />
+                <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
+                  <h2 style={{ marginBottom: '20px', textAlign: 'center' }}>✨ AI Editor Playground</h2>
                   
-                  <div style={{ flex: 1, background: 'rgba(0, 0, 0, 0.2)', borderRadius: '8px', padding: '16px', overflowY: 'auto' }}>
-                    {aiChatMessages.length === 0 ? (
-                      <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.5)' }}>Select a clip to start editing!</div>
-                    ) : (
-                      aiChatMessages.map((msg, idx) => (
-                        <div key={idx} style={{ marginBottom: '12px', display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                          <div style={{ background: msg.role === 'user' ? 'linear-gradient(135deg, #9333ea, #ec4899)' : 'rgba(59, 130, 246, 0.2)', color: 'white', padding: '10px 14px', borderRadius: '8px', maxWidth: '80%' }}>
-                            {msg.content}
-                          </div>
+                  {/* Chat Panel */}
+                  <div 
+                    style={{ 
+                      background: 'rgba(147, 51, 234, 0.1)', 
+                      borderRadius: '14px', 
+                      border: '1px solid rgba(147, 51, 234, 0.2)', 
+                      padding: '20px', 
+                      display: 'flex', 
+                      flexDirection: 'column', 
+                      gap: '16px',
+                      flex: 1,
+                      minHeight: 0
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.currentTarget.style.background = 'rgba(147, 51, 234, 0.2)';
+                      e.currentTarget.style.borderColor = 'rgba(147, 51, 234, 0.6)';
+                    }}
+                    onDragLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(147, 51, 234, 0.1)';
+                      e.currentTarget.style.borderColor = 'rgba(147, 51, 234, 0.2)';
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.currentTarget.style.background = 'rgba(147, 51, 234, 0.1)';
+                      e.currentTarget.style.borderColor = 'rgba(147, 51, 234, 0.2)';
+                      
+                      const clipId = e.dataTransfer?.getData('clipId');
+                      const clipTitle = e.dataTransfer?.getData('clipTitle');
+                      
+                      if (clipId) {
+                        // Add user message (clip dropped)
+                        setAiChatMessages(prev => [...prev, { role: 'user', content: `📎 ${clipTitle} (dropped for editing)` }]);
+                        // Add AI response
+                        setTimeout(() => {
+                          setAiChatMessages(prev => [...prev, { role: 'assistant', content: 'How can I make you money today? ;)' }]);
+                        }, 800);
+                      }
+                    }}
+                  >
+                    <h3 style={{ color: '#d8b4fe' }}>🤖 Your AI Coach</h3>
+                    
+                    <div style={{ flex: 1, background: 'rgba(0, 0, 0, 0.2)', borderRadius: '8px', padding: '16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {aiChatMessages.length === 0 ? (
+                        <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.5)', margin: 'auto', fontSize: '0.95em' }}>
+                          💡 Drag a clip from the right to start editing!
                         </div>
-                      ))
-                    )}
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <input 
-                      type="text" 
-                      value={aiInput}
-                      onChange={(e) => setAiInput(e.target.value)}
-                      onKeyPress={(e) => e.key === 'Enter' && handleAiChatSubmit()}
-                      placeholder="Describe your editing vision..."
-                      style={{ flex: 1, padding: '10px 14px', background: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(147, 51, 234, 0.2)', borderRadius: '8px', color: 'white' }}
-                    />
-                    <button 
-                      onClick={handleAiChatSubmit}
-                      style={{ padding: '10px 16px', background: 'linear-gradient(135deg, #9333ea, #ec4899)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer' }}
-                    >
-                      Send ✨
-                    </button>
-                  </div>
-                </div>
-
-                {/* Right Panel - Queue with Thumbnails */}
-                <div style={{ background: 'rgba(236, 72, 153, 0.08)', borderRadius: '14px', border: '1px solid rgba(236, 72, 153, 0.15)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px', overflow: 'auto' }}>
-                  <h3 style={{ color: '#f472b6' }}>📺 Clips Queue ({adminQueue.length})</h3>
-                  
-                  {adminQueue.length === 0 ? (
-                    <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.5)', padding: '40px 0' }}>
-                      <div style={{ fontSize: '2em', marginBottom: '8px' }}>📤</div>
-                      <div>Send clips to the queue to edit</div>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '12px' }}>
-                      {adminQueue.map((clip: AdminClip) => (
-                        <div
-                          key={clip.id}
-                          style={{
-                            position: 'relative',
-                            borderRadius: '10px',
-                            overflow: 'hidden',
-                            border: '2px solid rgba(236, 72, 153, 0.3)',
-                            cursor: 'pointer',
-                            transition: 'all 0.3s ease',
-                            background: 'rgba(0, 0, 0, 0.4)',
-                            aspectRatio: '16/9',
-                            backgroundImage: `url(${clip.thumbnail_url})`,
-                            backgroundSize: 'cover',
-                            backgroundPosition: 'center'
-                          }}
-                          className="clip-thumbnail-ai"
-                          onMouseEnter={async (e) => {
-                            (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)';
-                            (e.currentTarget as HTMLElement).style.borderColor = 'rgba(236, 72, 153, 0.8)';
-                            (e.currentTarget as HTMLElement).style.boxShadow = '0 8px 24px rgba(236, 72, 153, 0.3)';
-                            setHoveredClipId(clip.id);
-                            if (!hoveredClipVideoUrl || hoveredClipId !== clip.id) {
-                              try {
-                                const data = await api.getVideoUrl(clip.id);
-                                if (data.video_url) {
-                                  setHoveredClipVideoUrl(data.video_url);
-                                  setTimeout(() => {
-                                    if (hoverVideoRefs.current[clip.id]) {
-                                      hoverVideoRefs.current[clip.id]?.play().catch(() => {});
-                                    }
-                                  }, 50);
-                                }
-                              } catch (err) {
-                                console.error('Error fetching video:', err);
-                              }
-                            }
-                          }}
-                          onMouseLeave={(e) => {
-                            (e.currentTarget as HTMLElement).style.transform = 'scale(1)';
-                            (e.currentTarget as HTMLElement).style.borderColor = 'rgba(236, 72, 153, 0.3)';
-                            (e.currentTarget as HTMLElement).style.boxShadow = 'none';
-                            setHoveredClipId(null);
-                            if (hoverVideoRefs.current[clip.id]) {
-                              hoverVideoRefs.current[clip.id]?.pause();
-                            }
-                          }}
-                        >
-                          {/* Thumbnail with title overlay */}
-                          <div style={{ width: '100%', height: '100%', background: 'linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8))', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', position: 'relative', padding: '8px' }}>
-                            <div style={{ textAlign: 'center', fontSize: '0.7em', color: 'rgba(255, 255, 255, 0.9)', lineHeight: '1.2', maxHeight: '100%', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', fontWeight: 500 }}>
-                              {clip.title}
+                      ) : (
+                        aiChatMessages.map((msg, idx) => (
+                          <div key={idx} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                            <div style={{ background: msg.role === 'user' ? 'linear-gradient(135deg, #9333ea, #ec4899)' : 'rgba(59, 130, 246, 0.2)', color: 'white', padding: '12px 14px', borderRadius: '12px', maxWidth: '75%', wordWrap: 'break-word' }}>
+                              {msg.content}
                             </div>
                           </div>
-
-                          {/* Hover video preview */}
-                          {hoveredClipId === clip.id && (
-                            <div style={{
-                              position: 'absolute',
-                              top: 0,
-                              left: 0,
-                              width: '100%',
-                              height: '100%',
-                              background: 'rgba(0, 0, 0, 0.95)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              borderRadius: '10px',
-                              zIndex: 10,
-                              flexDirection: 'column'
-                            }}>
-                              {hoveredClipVideoUrl ? (
-                                <>
-                                  <video 
-                                    ref={(el) => { if (el) hoverVideoRefs.current[clip.id] = el; }}
-                                    src={hoveredClipVideoUrl}
-                                    style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '10px' }}
-                                    muted
-                                    loop
-                                    autoPlay
-                                  />
-                                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)', padding: '12px 8px', color: 'white' }}>
-                                    <div style={{ fontSize: '0.65em', lineHeight: '1.2', maxHeight: '40px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                      {clip.title}
-                                    </div>
-                                    <div style={{ fontSize: '0.6em', color: 'rgba(255, 255, 255, 0.7)', marginTop: '2px' }}>
-                                      {clip.channel} • 👁 {clip.view_count}
-                                    </div>
-                                  </div>
-                                </>
-                              ) : (
-                                <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.6)' }}>
-                                  <div style={{ fontSize: '1.5em', marginBottom: '4px' }}>⏳</div>
-                                  <div style={{ fontSize: '0.7em' }}>Loading...</div>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                        ))
+                      )}
                     </div>
-                  )}
 
-                  {/* Before & After Preview */}
-                  {selectedClipForAi && (
-                    <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(236, 72, 153, 0.2)' }}>
-                      <h4 style={{ fontSize: '0.9em', marginBottom: '12px', color: 'rgba(255, 255, 255, 0.7)' }}>✨ Preview</h4>
-                      <div style={{ display: 'flex', gap: '12px' }}>
-                        <div style={{ flex: 1, background: 'rgba(0, 0, 0, 0.3)', borderRadius: '8px', border: '1px dashed rgba(59, 130, 246, 0.2)', padding: '12px', textAlign: 'center', fontSize: '0.85em', color: 'rgba(255, 255, 255, 0.5)' }}>
-                          Original
-                        </div>
-                        <div style={{ flex: 1, background: 'rgba(0, 0, 0, 0.3)', borderRadius: '8px', border: '1px dashed rgba(147, 51, 234, 0.2)', padding: '12px', textAlign: 'center', fontSize: '0.85em', color: 'rgba(255, 255, 255, 0.5)' }}>
-                          AI Enhanced
-                        </div>
-                      </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input 
+                        type="text" 
+                        value={aiInput}
+                        onChange={(e) => setAiInput(e.target.value)}
+                        onKeyPress={(e) => e.key === 'Enter' && handleAiChatSubmit()}
+                        placeholder="Describe your editing vision..."
+                        style={{ flex: 1, padding: '10px 14px', background: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(147, 51, 234, 0.2)', borderRadius: '8px', color: 'white' }}
+                      />
+                      <button 
+                        onClick={handleAiChatSubmit}
+                        style={{ padding: '10px 16px', background: 'linear-gradient(135deg, #9333ea, #ec4899)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer' }}
+                      >
+                        Send ✨
+                      </button>
                     </div>
-                  )}
+                  </div>
                 </div>
               </div>
+
+              {/* QUEUE SECTION - RIGHT SIDE (SEPARATE DIV) */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', height: 'calc(100vh - 80px)', width: '320px', background: 'rgba(0, 0, 0, 0.8)', borderRadius: '14px', border: '1px solid rgba(0, 0, 0, 0.6)', padding: '16px', overflowY: 'auto', flexShrink: 0 }}>
+                <h3 style={{ color: '#f472b6', margin: 0, fontSize: '0.95em' }}>📺 Queue</h3>
+                
+                {adminQueue.length === 0 ? (
+                  <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.4)', padding: '40px 10px', fontSize: '0.85em' }}>
+                    <div style={{ fontSize: '2em', marginBottom: '8px' }}>📤</div>
+                    <div>Send clips</div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {adminQueue.map((clip: AdminClip) => (
+                      <div
+                        key={clip.id}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer?.setData('clipId', clip.id);
+                          e.dataTransfer?.setData('clipTitle', clip.title);
+                        }}
+                            style={{
+                              position: 'relative',
+                              borderRadius: '10px',
+                              overflow: 'hidden',
+                              border: '2px solid rgba(236, 72, 153, 0.4)',
+                              cursor: 'grab',
+                              transition: 'all 0.3s ease',
+                              background: 'rgba(0, 0, 0, 0.5)',
+                              height: '85px',
+                              backgroundImage: `url(${clip.thumbnail_url})`,
+                              backgroundSize: 'cover',
+                              backgroundPosition: 'center',
+                              flexShrink: 0
+                            }}
+                            className="clip-thumbnail-ai"
+                            onMouseEnter={async (e) => {
+                              (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)';
+                              (e.currentTarget as HTMLElement).style.borderColor = 'rgba(236, 72, 153, 0.8)';
+                              (e.currentTarget as HTMLElement).style.boxShadow = '0 8px 24px rgba(236, 72, 153, 0.3)';
+                              setHoveredClipId(clip.id);
+                              if (!hoveredClipVideoUrl || hoveredClipId !== clip.id) {
+                                try {
+                                  const data = await api.getVideoUrl(clip.id);
+                                  if (data.video_url) {
+                                    setHoveredClipVideoUrl(data.video_url);
+                                    setTimeout(() => {
+                                      if (hoverVideoRefs.current[clip.id]) {
+                                        hoverVideoRefs.current[clip.id]?.play().catch(() => {});
+                                      }
+                                    }, 50);
+                                  }
+                                } catch (err) {
+                                  console.error('Error fetching video:', err);
+                                }
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              (e.currentTarget as HTMLElement).style.transform = 'scale(1)';
+                              (e.currentTarget as HTMLElement).style.borderColor = 'rgba(236, 72, 153, 0.3)';
+                              (e.currentTarget as HTMLElement).style.boxShadow = 'none';
+                              setHoveredClipId(null);
+                              if (hoverVideoRefs.current[clip.id]) {
+                                hoverVideoRefs.current[clip.id]?.pause();
+                              }
+                            }}
+                          >
+                            {/* Thumbnail with title overlay */}
+                            <div style={{ width: '100%', height: '100%', background: 'linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8))', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', position: 'relative', padding: '6px' }}>
+                              <div style={{ textAlign: 'center', fontSize: '0.65em', color: 'rgba(255, 255, 255, 0.9)', lineHeight: '1.1', maxHeight: '100%', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', fontWeight: 500 }}>
+                                {clip.title}
+                              </div>
+                            </div>
+
+                            {/* Hover video preview */}
+                            {hoveredClipId === clip.id && (
+                              <div style={{
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                width: '100%',
+                                height: '100%',
+                                background: 'rgba(0, 0, 0, 0.95)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                borderRadius: '10px',
+                                zIndex: 10,
+                                flexDirection: 'column'
+                              }}>
+                                {hoveredClipVideoUrl ? (
+                                  <>
+                                    <video 
+                                      ref={(el) => { if (el) hoverVideoRefs.current[clip.id] = el; }}
+                                      src={hoveredClipVideoUrl}
+                                      style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '10px' }}
+                                      muted
+                                      loop
+                                      autoPlay
+                                    />
+                                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)', padding: '8px 6px', color: 'white' }}>
+                                      <div style={{ fontSize: '0.6em', lineHeight: '1.1', maxHeight: '30px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {clip.title}
+                                      </div>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.6)' }}>
+                                    <div style={{ fontSize: '1.2em', marginBottom: '2px' }}>⏳</div>
+                                    <div style={{ fontSize: '0.6em' }}>Loading...</div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
             </div>
           )}
         </div>
