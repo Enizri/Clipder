@@ -93,7 +93,8 @@ Please provide detailed editing recommendations for this clip.
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "mixtral-8x7b-32768",
+                    #updated model from mistral to gpt-oss-120b 
+                    "model": "openai/gpt-oss-120b",
                     "messages": messages,
                     "temperature": 0.7,
                     "max_tokens": 1024,
