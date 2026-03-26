@@ -1,3 +1,4 @@
+from http.client import HTTPException
 import os
 import json
 import requests
@@ -130,10 +131,14 @@ class TwitchClient:
             "client_secret": self.config.twitch_client_secret,
             "grant_type": "client_credentials"
         }
-        response = requests.post(url, data=data, timeout=10)
-        response.raise_for_status()
-        self._token = response.json()["access_token"]
-    
+        try:
+            response = requests.post(url, data=data, timeout=10)
+            response.raise_for_status()
+            self._token = response.json()["access_token"]
+        except requests.exceptions.HTTPError as e:
+            print(f"Twitch Auth Failed: {e.response.text}")
+            raise HTTPException(status_code=401, detail="Twitch credentials invalid")
+
     def get_broadcaster_id(self, username: str) -> Optional[str]:
         url = f"https://api.twitch.tv/helix/users?login={username}"
         response = requests.get(url, headers=self.headers, timeout=10)

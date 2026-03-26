@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { api, createLeaderboardSocket } from './api/client';
 import type { Clip, LeaderboardClip, AdminClip, Comment, EmoteResponse, GifResponse, User } from './types';
 
-type Tab = 'swipe' | 'leaderboard' | 'admin' | 'profile';
+type Tab = 'swipe' | 'leaderboard' | 'admin' | 'profile' | 'ai-editor';
 type EmoteTab = 'twitch' | 'bttv' | '7tv' | 'gifs';
 
 const videoUrlCache: Record<string, string> = {};
@@ -448,6 +448,22 @@ function EmotePicker({ onSelect, onClose }: { onSelect: (url: string, code: stri
   );
 }
 
+function HeroBanner() {
+  return (
+    <div className="hero-banner">
+      <div className="hero-inner">
+        <div>
+          <h2>Discover & Curate the Best Twitch Clips</h2>
+          <p>Swipe, like, and send clips to the upload queue — discover viral moments faster.</p>
+        </div>
+        <div>
+          <button className="btn-primary" onClick={() => { const el = document.getElementById('card-stack'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}>Start Swiping</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AuthModal({ isOpen, onClose, onLogin }: { isOpen: boolean; onClose: () => void; onLogin: (token: string, user: User) => void }) {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
@@ -455,11 +471,18 @@ function AuthModal({ isOpen, onClose, onLogin }: { isOpen: boolean; onClose: () 
   const [username, setUsername] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
+    // basic client-side validation
+    if (!email || !password || (!isLogin && !username)) {
+      setError('Please fill in all required fields');
+      setLoading(false);
+      return;
+    }
 
     try {
       if (isLogin) {
@@ -474,7 +497,8 @@ function AuthModal({ isOpen, onClose, onLogin }: { isOpen: boolean; onClose: () 
         onClose();
       }
     } catch (err: any) {
-      setError(err.message || 'Authentication failed');
+      const msg = err?.detail || err?.message || JSON.stringify(err) || 'Authentication failed';
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -483,13 +507,14 @@ function AuthModal({ isOpen, onClose, onLogin }: { isOpen: boolean; onClose: () 
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={onClose} aria-modal="true" role="dialog">
       <div className="auth-modal" onClick={e => e.stopPropagation()}>
-        <button className="modal-close" onClick={onClose}>✕</button>
+        <button className="modal-close" onClick={onClose} aria-label="Close">✕</button>
         <h2>{isLogin ? 'Welcome Back' : 'Create Account'}</h2>
         <form onSubmit={handleSubmit}>
           {!isLogin && (
             <input
+              aria-label="Username"
               type="text"
               placeholder="Username"
               value={username}
@@ -498,22 +523,36 @@ function AuthModal({ isOpen, onClose, onLogin }: { isOpen: boolean; onClose: () 
             />
           )}
           <input
+            aria-label="Email"
             type="email"
             placeholder="Email"
             value={email}
             onChange={e => setEmail(e.target.value)}
             required
           />
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            required
-          />
+          <div style={{ position: 'relative' }}>
+            <input
+              aria-label="Password"
+              type={showPassword ? 'text' : 'password'}
+              placeholder="Password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              required
+            />
+            <button type="button" onClick={() => setShowPassword(s => !s)} style={{ position: 'absolute', right: 10, top: 10, background: 'none', border: 'none', color: '#8b5cf6', cursor: 'pointer' }} aria-label="Toggle password visibility">
+              {showPassword ? 'Hide' : 'Show'}
+            </button>
+          </div>
+
           {error && <div className="error-msg">{error}</div>}
-          <button type="submit" disabled={loading}>
-            {loading ? 'Loading...' : (isLogin ? 'Login' : 'Sign Up')}
+
+          <button type="submit" disabled={loading} aria-busy={loading}>
+            {loading ? (
+              <>
+                <span className="video-loading active" style={{ width: 18, height: 18, borderWidth: 2, marginRight: 8 }}></span>
+                Sending...
+              </>
+            ) : (isLogin ? 'Login' : 'Sign Up')}
           </button>
         </form>
         <p className="auth-switch">
@@ -538,6 +577,13 @@ function App() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardClip[]>([]);
   const [prevLeaderboard, setPrevLeaderboard] = useState<Map<string, number>>(new Map());
   const [adminQueue, setAdminQueue] = useState<AdminClip[]>([]);
+  const [aiChatMessages, setAiChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
+  const [aiInput, setAiInput] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [hoveredClipId, setHoveredClipId] = useState<string | null>(null);
+  const [hoveredClipVideoUrl, setHoveredClipVideoUrl] = useState<string | null>(null);
+  const [selectedClipForAi, _setSelectedClipForAi] = useState<AdminClip | null>(null);
+  const hoverVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const [showComments, setShowComments] = useState(false);
   const [activeCommentClip, setActiveCommentClip] = useState<{ id: string; title: string } | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
@@ -551,6 +597,7 @@ function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
+  const [userSubscription, setUserSubscription] = useState<'free' | 'trial' | 'pro'>('free');
 
   const cardRef = useRef<HTMLDivElement>(null);
   const theaterVideoRef = useRef<HTMLVideoElement>(null);
@@ -662,6 +709,45 @@ function App() {
       setAdminQueue(data);
     } catch (err) {
       console.error('Failed to load admin queue:', err);
+    }
+  };
+
+  const handleAiChatSubmit = async () => {
+    if (!aiInput.trim() || !selectedClipForAi || aiLoading) return;
+
+    const userMsg = aiInput.trim();
+    setAiInput('');
+    setAiLoading(true);
+
+    // Add user message to chat
+    setAiChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+
+    try {
+      const response = await fetch('/api/v1/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clip_title: selectedClipForAi.title,
+          clip_channel: selectedClipForAi.channel,
+          user_message: userMsg,
+          conversation_history: aiChatMessages,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      setAiChatMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
+    } catch (error) {
+      console.error('AI chat error:', error);
+      setAiChatMessages(prev => [...prev, {
+        role: 'assistant',
+        content: 'Sorry, I couldn\'t process your request. Please try again.'
+      }]);
+    } finally {
+      setAiLoading(false);
     }
   };
 
@@ -891,10 +977,10 @@ function App() {
     alert('✅ Sent to Admin Upload Queue!');
   };
 
-  const handleRemoveFromQueue = async (clipId: string) => {
-    await api.removeFromQueue(clipId);
-    loadAdminQueue();
-  };
+  // const handleRemoveFromQueue = async (clipId: string) => {
+  //   await api.removeFromQueue(clipId);
+  //   loadAdminQueue();
+  // };
 
   const handleLogin = (_token: string, userData: User) => {
     setUser(userData);
@@ -916,7 +1002,7 @@ function App() {
           <button className={`tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}`} onClick={() => { setActiveTab('leaderboard'); closeComments(); loadLeaderboard(); stopAllVideos(); }}>
             Leaderboard {wsConnected && <span className="ws-indicator"></span>}
           </button>
-          <button className={`tab-btn ${activeTab === 'admin' ? 'active' : ''}`} onClick={() => { setActiveTab('admin'); closeComments(); loadAdminQueue(); stopAllVideos(); }}>Admin Queue ({adminQueue.length})</button>
+          <button className={`tab-btn ${activeTab === 'ai-editor' ? 'active' : ''}`} onClick={() => { setActiveTab('ai-editor'); closeComments(); loadAdminQueue(); stopAllVideos(); }}>🚀 AI Editor</button>
           <button className={`tab-btn ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => { setActiveTab('profile'); closeComments(); stopAllVideos(); }}>Profile</button>
         </nav>
         <div className="auth-section">
@@ -936,6 +1022,9 @@ function App() {
 
       <div className="app-container">
         <div id="swipe" className={`view-section ${activeTab === 'swipe' ? 'active' : ''}`}>
+          <div style={{ width: '100%', padding: '0 5%' }}>
+            <HeroBanner />
+          </div>
           <div className="category-menu">
             {categories.map((cat) => (
               <button key={cat} className={`cat-pill ${currentCategory === cat ? 'active' : ''}`} onClick={(e) => handleCategoryChange(cat, e)}>
@@ -1106,35 +1195,329 @@ function App() {
           </div>
         </div>
 
-        <div id="admin" className={`view-section ${activeTab === 'admin' ? 'active' : ''}`}>
-          <div className="list-container" style={{ paddingBottom: '20px' }}>
-            <h2 className="section-title">🚀 Ready for Upload</h2>
-            <div className="section-subtitle">Clips selected from the leaderboard, waiting to be processed.</div>
+        <div id="ai-editor" className={`view-section ${activeTab === 'ai-editor' ? 'active' : ''}`} style={{ display: 'flex', flexDirection: 'column', padding: '20px', overflow: 'auto', alignItems: 'center' }}>
+          
+          {userSubscription === 'free' ? (
+            // PRICING SECTION FOR FREE USERS
+            <div style={{ width: '100%', maxWidth: '1100px' }}>
+              <div className="pricing-hero">
+                <h2>🚀 AI Editor Pro</h2>
+                <p>Transform your clips with AI-powered editing suggestions. Get pro-level edits in seconds, not hours.</p>
+              </div>
 
-            {adminQueue.length === 0 ? (
-              <div className="empty-msg">Admin queue is empty.<br /><br />Add clips from the Leaderboard to process them.</div>
-            ) : (
-              adminQueue.map((clip) => (
-                <div key={clip.id} className="list-item">
-                  <div className="thumb-wrapper">
-                    <MiniThumb clip={clip} onOpenTheater={() => openTheaterMode(clip.id)} />
+              <div className="pricing-cards">
+            {/* FREE TRIAL CARD */}
+            <div className="pricing-card">
+              <div className="card-header">
+                <div className="card-title">Free Trial</div>
+                <div>
+                  <div className="card-price">Free</div>
+                </div>
+              </div>
+              <p className="card-description">Get started with limited AI editing credits</p>
+              <div className="card-benefits">
+                <div className="benefit-item">
+                  <span className="benefit-icon">⭐</span>
+                  <span>3 AI edits per month</span>
+                </div>
+                <div className="benefit-item">
+                  <span className="benefit-icon">✨</span>
+                  <span>Basic editing suggestions</span>
+                </div>
+                <div className="benefit-item">
+                  <span className="benefit-icon">🎬</span>
+                  <span>720p preview quality</span>
+                </div>
+                <div className="benefit-item">
+                  <span className="benefit-icon">⏱</span>
+                  <span>No expiration - use anytime</span>
+                </div>
+              </div>
+              <button 
+                className="pricing-btn pricing-btn-secondary"
+                onClick={() => {
+                  setUserSubscription('trial');
+                  setActiveTab('ai-editor');
+                }}
+              >
+                Start Free Trial
+              </button>
+            </div>
+
+            {/* MONTHLY CARD */}
+            <div className="pricing-card">
+              <div className="card-header">
+                <div className="card-title">Pro Monthly</div>
+                <div>
+                  <div className="card-price">$9.99<span className="card-price-period">/mo</span></div>
+                </div>
+              </div>
+              <p className="card-description">Perfect for serious content creators</p>
+              <div className="card-benefits">
+                <div className="benefit-item">
+                  <span className="benefit-icon">⭐</span>
+                  <span>Unlimited AI edits per month</span>
+                </div>
+                <div className="benefit-item">
+                  <span className="benefit-icon">✨</span>
+                  <span>Advanced multi-prompt suggestions</span>
+                </div>
+                <div className="benefit-item">
+                  <span className="benefit-icon">🎬</span>
+                  <span>1080p + HD exports</span>
+                </div>
+                <div className="benefit-item">
+                  <span className="benefit-icon">🎵</span>
+                  <span>Music library access</span>
+                </div>
+                <div className="benefit-item">
+                  <span className="benefit-icon">⚙️</span>
+                  <span>Priority support</span>
+                </div>
+              </div>
+              <button 
+                className="pricing-btn pricing-btn-primary"
+                onClick={() => {
+                  setUserSubscription('pro');
+                  setActiveTab('ai-editor');
+                }}
+              >
+                Upgrade to Pro
+              </button>
+            </div>
+
+            {/* YEARLY CARD - FEATURED */}
+            <div className="pricing-card featured">
+              <div className="featured-badge">BEST VALUE 40% OFF</div>
+              <div className="card-header">
+                <div className="card-title">Pro Yearly</div>
+                <div>
+                  <div className="card-price">$71.88<span className="card-price-period">/yr</span></div>
+                </div>
+              </div>
+              <p className="card-description">Save $47.88 vs monthly. Most popular choice.</p>
+              <div className="card-benefits">
+                <div className="benefit-item">
+                  <span className="benefit-icon">⭐</span>
+                  <span>All Pro features included</span>
+                </div>
+                <div className="benefit-item">
+                  <span className="benefit-icon">💎</span>
+                  <span>Unlimited everything</span>
+                </div>
+                <div className="benefit-item">
+                  <span className="benefit-icon">🎬</span>
+                  <span>4K export capabilities</span>
+                </div>
+                <div className="benefit-item">
+                  <span className="benefit-icon">🤖</span>
+                  <span>Early access to new AI features</span>
+                </div>
+                <div className="benefit-item">
+                  <span className="benefit-icon">👥</span>
+                  <span>16 team member slots</span>
+                </div>
+                <div className="benefit-item">
+                  <span className="benefit-icon">🚀</span>
+                  <span>VIP priority support (24/7)</span>
+                </div>
+              </div>
+              <button 
+                className="pricing-btn pricing-btn-primary"
+                onClick={() => {
+                  setUserSubscription('pro');
+                  setActiveTab('ai-editor');
+                }}
+              >
+                Get Yearly Deal
+              </button>
+            </div>
+          </div>
+
+          {/* FOOTER CTA */}
+          <div className="pricing-footer">
+            <p>🎁 <span className="limited-offer">Limited time: First month 50% off any plan!</span></p>
+            <p style={{ fontSize: '0.8em', color: '#666' }}>Cancel anytime. No hidden fees. Start your free trial now.</p>
+          </div>
+            </div>
+          ) : (
+            // AI CHAT INTERFACE FOR PRO/TRIAL USERS
+            <div style={{ width: '100%', maxWidth: '1200px', height: '100%' }}>
+              <h2 style={{ marginBottom: '20px', textAlign: 'center' }}>✨ AI Editor Playground</h2>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', height: 'calc(100vh - 200px)' }}>
+                {/* Left Panel - Chat */}
+                <div style={{ background: 'rgba(147, 51, 234, 0.1)', borderRadius: '14px', border: '1px solid rgba(147, 51, 234, 0.2)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <h3 style={{ color: '#d8b4fe' }}>🤖 Your AI Coach</h3>
+                  <select style={{ padding: '10px', background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(147, 51, 234, 0.3)', borderRadius: '8px', color: 'white' }}>
+                    <option>Select a clip...</option>
+                    {adminQueue.map((clip: AdminClip) => (
+                      <option key={clip.id} value={clip.id}>{clip.title}</option>
+                    ))}
+                  </select>
+                  
+                  <div style={{ flex: 1, background: 'rgba(0, 0, 0, 0.2)', borderRadius: '8px', padding: '16px', overflowY: 'auto' }}>
+                    {aiChatMessages.length === 0 ? (
+                      <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.5)' }}>Select a clip to start editing!</div>
+                    ) : (
+                      aiChatMessages.map((msg, idx) => (
+                        <div key={idx} style={{ marginBottom: '12px', display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                          <div style={{ background: msg.role === 'user' ? 'linear-gradient(135deg, #9333ea, #ec4899)' : 'rgba(59, 130, 246, 0.2)', color: 'white', padding: '10px 14px', borderRadius: '8px', maxWidth: '80%' }}>
+                            {msg.content}
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
-                  <div className="item-details">
-                    <div className="item-title">{clip.title}</div>
-                    <div className="item-stats">Ready for Upload • {clip.channel}</div>
-                  </div>
-                  <div className="action-group">
-                    <button className="btn-small btn-danger" onClick={() => handleRemoveFromQueue(clip.id)}>Remove</button>
-                    <button className="btn-small btn-primary">Upload Now</button>
+
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input 
+                      type="text" 
+                      value={aiInput}
+                      onChange={(e) => setAiInput(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleAiChatSubmit()}
+                      placeholder="Describe your editing vision..."
+                      style={{ flex: 1, padding: '10px 14px', background: 'rgba(30, 41, 59, 0.6)', border: '1px solid rgba(147, 51, 234, 0.2)', borderRadius: '8px', color: 'white' }}
+                    />
+                    <button 
+                      onClick={handleAiChatSubmit}
+                      style={{ padding: '10px 16px', background: 'linear-gradient(135deg, #9333ea, #ec4899)', border: 'none', borderRadius: '8px', color: 'white', cursor: 'pointer' }}
+                    >
+                      Send ✨
+                    </button>
                   </div>
                 </div>
-              ))
-            )}
-          </div>
-          {adminQueue.length > 0 && (
-            <div className="admin-footer">
-              <div style={{ fontSize: '1.1em', fontWeight: 600 }}>{adminQueue.length} clips ready to process</div>
-              <button className="btn-small btn-primary">Process & Upload All</button>
+
+                {/* Right Panel - Queue with Thumbnails */}
+                <div style={{ background: 'rgba(236, 72, 153, 0.08)', borderRadius: '14px', border: '1px solid rgba(236, 72, 153, 0.15)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px', overflow: 'auto' }}>
+                  <h3 style={{ color: '#f472b6' }}>📺 Clips Queue ({adminQueue.length})</h3>
+                  
+                  {adminQueue.length === 0 ? (
+                    <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.5)', padding: '40px 0' }}>
+                      <div style={{ fontSize: '2em', marginBottom: '8px' }}>📤</div>
+                      <div>Send clips to the queue to edit</div>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '12px' }}>
+                      {adminQueue.map((clip: AdminClip) => (
+                        <div
+                          key={clip.id}
+                          style={{
+                            position: 'relative',
+                            borderRadius: '10px',
+                            overflow: 'hidden',
+                            border: '2px solid rgba(236, 72, 153, 0.3)',
+                            cursor: 'pointer',
+                            transition: 'all 0.3s ease',
+                            background: 'rgba(0, 0, 0, 0.4)',
+                            aspectRatio: '16/9',
+                            backgroundImage: `url(${clip.thumbnail_url})`,
+                            backgroundSize: 'cover',
+                            backgroundPosition: 'center'
+                          }}
+                          className="clip-thumbnail-ai"
+                          onMouseEnter={async (e) => {
+                            (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)';
+                            (e.currentTarget as HTMLElement).style.borderColor = 'rgba(236, 72, 153, 0.8)';
+                            (e.currentTarget as HTMLElement).style.boxShadow = '0 8px 24px rgba(236, 72, 153, 0.3)';
+                            setHoveredClipId(clip.id);
+                            if (!hoveredClipVideoUrl || hoveredClipId !== clip.id) {
+                              try {
+                                const data = await api.getVideoUrl(clip.id);
+                                if (data.video_url) {
+                                  setHoveredClipVideoUrl(data.video_url);
+                                  setTimeout(() => {
+                                    if (hoverVideoRefs.current[clip.id]) {
+                                      hoverVideoRefs.current[clip.id]?.play().catch(() => {});
+                                    }
+                                  }, 50);
+                                }
+                              } catch (err) {
+                                console.error('Error fetching video:', err);
+                              }
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            (e.currentTarget as HTMLElement).style.transform = 'scale(1)';
+                            (e.currentTarget as HTMLElement).style.borderColor = 'rgba(236, 72, 153, 0.3)';
+                            (e.currentTarget as HTMLElement).style.boxShadow = 'none';
+                            setHoveredClipId(null);
+                            if (hoverVideoRefs.current[clip.id]) {
+                              hoverVideoRefs.current[clip.id]?.pause();
+                            }
+                          }}
+                        >
+                          {/* Thumbnail with title overlay */}
+                          <div style={{ width: '100%', height: '100%', background: 'linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8))', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', position: 'relative', padding: '8px' }}>
+                            <div style={{ textAlign: 'center', fontSize: '0.7em', color: 'rgba(255, 255, 255, 0.9)', lineHeight: '1.2', maxHeight: '100%', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', fontWeight: 500 }}>
+                              {clip.title}
+                            </div>
+                          </div>
+
+                          {/* Hover video preview */}
+                          {hoveredClipId === clip.id && (
+                            <div style={{
+                              position: 'absolute',
+                              top: 0,
+                              left: 0,
+                              width: '100%',
+                              height: '100%',
+                              background: 'rgba(0, 0, 0, 0.95)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              borderRadius: '10px',
+                              zIndex: 10,
+                              flexDirection: 'column'
+                            }}>
+                              {hoveredClipVideoUrl ? (
+                                <>
+                                  <video 
+                                    ref={(el) => { if (el) hoverVideoRefs.current[clip.id] = el; }}
+                                    src={hoveredClipVideoUrl}
+                                    style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '10px' }}
+                                    muted
+                                    loop
+                                    autoPlay
+                                  />
+                                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)', padding: '12px 8px', color: 'white' }}>
+                                    <div style={{ fontSize: '0.65em', lineHeight: '1.2', maxHeight: '40px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {clip.title}
+                                    </div>
+                                    <div style={{ fontSize: '0.6em', color: 'rgba(255, 255, 255, 0.7)', marginTop: '2px' }}>
+                                      {clip.channel} • 👁 {clip.view_count}
+                                    </div>
+                                  </div>
+                                </>
+                              ) : (
+                                <div style={{ textAlign: 'center', color: 'rgba(255, 255, 255, 0.6)' }}>
+                                  <div style={{ fontSize: '1.5em', marginBottom: '4px' }}>⏳</div>
+                                  <div style={{ fontSize: '0.7em' }}>Loading...</div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Before & After Preview */}
+                  {selectedClipForAi && (
+                    <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(236, 72, 153, 0.2)' }}>
+                      <h4 style={{ fontSize: '0.9em', marginBottom: '12px', color: 'rgba(255, 255, 255, 0.7)' }}>✨ Preview</h4>
+                      <div style={{ display: 'flex', gap: '12px' }}>
+                        <div style={{ flex: 1, background: 'rgba(0, 0, 0, 0.3)', borderRadius: '8px', border: '1px dashed rgba(59, 130, 246, 0.2)', padding: '12px', textAlign: 'center', fontSize: '0.85em', color: 'rgba(255, 255, 255, 0.5)' }}>
+                          Original
+                        </div>
+                        <div style={{ flex: 1, background: 'rgba(0, 0, 0, 0.3)', borderRadius: '8px', border: '1px dashed rgba(147, 51, 234, 0.2)', padding: '12px', textAlign: 'center', fontSize: '0.85em', color: 'rgba(255, 255, 255, 0.5)' }}>
+                          AI Enhanced
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </div>
