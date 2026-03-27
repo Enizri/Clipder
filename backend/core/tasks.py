@@ -19,7 +19,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from backend.core.cache_provider import get_cache_provider
 from backend.core.state import ConnectionManager
-from backend.core.database import async_session_maker, init_database
+from backend.core import database
 from backend.models import (
     Clip,
     LeaderboardSnapshot,
@@ -57,20 +57,27 @@ async def job_calculate_top_10() -> None:
     """
     try:
         # Initialize database if needed
-        if async_session_maker is None:
-            init_database()
+        if database.async_session_maker is None:
+            database.init_database()
 
         current_month = datetime.now(timezone.utc).strftime("%Y-%m")
         cache = get_cache_provider()
 
         # Use global async_session_maker instead of creating new engine
-        async with async_session_maker() as db:
+        if database.async_session_maker is None:
+            logger.warning("Database not initialized; skipping job_calculate_top_10")
+            return
+
+        async with database.async_session_maker() as db:
             # Check if table has required columns - skip if not ready
             try:
                 result = await db.execute(
                     select(Clip)
-                    .where(Clip.month_key == current_month)
-                    .order_by((Clip.monthly_likes - Clip.monthly_dislikes).desc())
+                    .where(
+                        (Clip.month_key == current_month)
+                        & (Clip.monthly_likes > 0)
+                    )
+                    .order_by(Clip.monthly_likes.desc())
                     .limit(10)
                 )
                 clips = result.scalars().all()
@@ -92,7 +99,7 @@ async def job_calculate_top_10() -> None:
                     "title": clip.title,
                     "creator": clip.creator_name,
                     "likes": clip.monthly_likes,
-                    "score": clip.monthly_likes - clip.monthly_dislikes,
+                    "score": clip.monthly_likes,
                     "thumbnail_url": clip.thumbnail_url,
                 }
                 for idx, clip in enumerate(clips)
@@ -198,10 +205,14 @@ async def job_archive_snapshots() -> None:
         logger.info("Starting snapshot archival job")
 
         # Initialize database if needed
-        if async_session_maker is None:
-            init_database()
+        if database.async_session_maker is None:
+            database.init_database()
 
-        async with async_session_maker() as db:
+        if database.async_session_maker is None:
+            logger.warning("Database not initialized; skipping job_archive_snapshots")
+            return
+
+        async with database.async_session_maker() as db:
             cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
 
             # Find and delete old snapshots
@@ -241,14 +252,18 @@ async def job_finalize_month_end() -> None:
         logger.info("Starting month-end finalization job")
 
         # Initialize database if needed
-        if async_session_maker is None:
-            init_database()
+        if database.async_session_maker is None:
+            database.init_database()
 
         now = datetime.now(timezone.utc)
         previous_month = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
         current_month = now.strftime("%Y-%m")
 
-        async with async_session_maker() as db:
+        if database.async_session_maker is None:
+            logger.warning("Database not initialized; skipping job_finalize_month_end")
+            return
+
+        async with database.async_session_maker() as db:
             # Get top 10 from previous month
             result = await db.execute(
                 select(Clip)

@@ -60,6 +60,8 @@ const LeaderboardRow: React.FC<LeaderboardRowProps> = ({ clip, onOpenComments })
     const [volume, setVolume] = useState(50);
     const videoRef = useRef<HTMLVideoElement>(null);
     const fetchedRef = useRef(false);
+    const lastFetchFailedAtRef = useRef<number | null>(null);
+    const warnedRef = useRef(false);
 
     const handleMouseEnter = async () => {
         const video = videoRef.current;
@@ -74,31 +76,53 @@ const LeaderboardRow: React.FC<LeaderboardRowProps> = ({ clip, onOpenComments })
             return;
         }
 
-        // If already tried to fetch, don't try again
+        // If we recently failed, allow retry after a short cooldown
+        const now = Date.now();
+        if (lastFetchFailedAtRef.current && now - lastFetchFailedAtRef.current < 10_000) {
+            return;
+        }
+
+        // If already fetched successfully, don't fetch again
         if (fetchedRef.current) return;
-        fetchedRef.current = true;
 
         // Fetch video URL from API
         setIsLoading(true);
         try {
-            const apiUrl = window.location.port === '3000'
-                ? `http://localhost:8000/api/v1/clips/${clip.clip_id}/video-url`
+            const apiOrigin = (import.meta as any).env?.VITE_API_ORIGIN as string | undefined;
+            const origin = (apiOrigin || '').trim().replace(/\/$/, '');
+            const apiUrl = origin
+                ? `${origin}/api/v1/clips/${clip.clip_id}/video-url`
                 : `/api/v1/clips/${clip.clip_id}/video-url`;
             
             const response = await fetch(apiUrl);
-            if (response.ok) {
-                const data = await response.json();
-                if (data.video_url && videoRef.current) {
-                    videoRef.current.src = data.video_url;
-                    setVideoSrc(data.video_url);
-                    videoRef.current.volume = volume / 100;
-                    videoRef.current.muted = isMuted || volume === 0;
-                    // Auto-play immediately
-                    videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+            if (!response.ok) {
+                lastFetchFailedAtRef.current = Date.now();
+                if (!warnedRef.current) {
+                    warnedRef.current = true;
+                    console.warn(`Preview unavailable for clip ${clip.clip_id}: ${response.status}`);
                 }
+                return;
+            }
+
+            const data = await response.json();
+            if (data.video_url && videoRef.current) {
+                videoRef.current.src = data.video_url;
+                setVideoSrc(data.video_url);
+                fetchedRef.current = true;
+                lastFetchFailedAtRef.current = null;
+                videoRef.current.volume = volume / 100;
+                videoRef.current.muted = isMuted || volume === 0;
+                // Auto-play immediately
+                videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+            } else {
+                lastFetchFailedAtRef.current = Date.now();
             }
         } catch (e) {
-            console.error('Failed to fetch video:', e);
+            lastFetchFailedAtRef.current = Date.now();
+            if (!warnedRef.current) {
+                warnedRef.current = true;
+                console.warn('Failed to fetch video preview:', e);
+            }
         } finally {
             setIsLoading(false);
         }

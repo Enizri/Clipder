@@ -1,7 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Fredoka+One&display=swap');
-
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: 'Inter', sans-serif; background: #0a0a0a; min-height: 100vh; color: #ffffff; overflow: hidden; }
+body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0a0a0a; min-height: 100vh; color: #ffffff; overflow: hidden; }
 
 body::before {
     content: ''; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -417,8 +415,8 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
     opacity: 0; transform: scale(0.5); transition: opacity 0.1s ease, transform 0.1s ease;
 }
-.hint-text-main { font-family: 'Fredoka One', cursive; font-size: 3.5em; font-weight: 900; letter-spacing: 2px; }
-.hint-text-bubbly { font-family: 'Fredoka One', cursive; font-size: 1.6em; padding: 6px 20px; background: #fff; border-radius: 50px; color: #000; white-space: nowrap; box-shadow: 0 8px 0px rgba(0,0,0,0.2), 0 0 25px rgba(255,255,255,0.6); transform: rotate(-5deg); }
+.hint-text-main { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 3.5em; font-weight: 900; letter-spacing: 2px; }
+.hint-text-bubbly { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 1.6em; padding: 6px 20px; background: #fff; border-radius: 50px; color: #000; white-space: nowrap; box-shadow: 0 8px 0px rgba(0,0,0,0.2), 0 0 25px rgba(255,255,255,0.6); transform: rotate(-5deg); }
 .aura-strings { position: absolute; width: 250px; height: 250px; top: 50%; left: 50%; transform: translate(-50%, -50%); border-radius: 50%; filter: blur(30px); opacity: 0.5; z-index: -1; pointer-events: none; mix-blend-mode: screen; }
 .swipe-hint.left { left: -60px; color: #ff3e3e; }
 .swipe-hint.left .hint-text-main { filter: drop-shadow(0 0 15px rgba(255, 62, 62, 0.8)); text-shadow: 2px 2px 0 #000; }

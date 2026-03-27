@@ -10,7 +10,7 @@ from starlette.responses import Response
 
 from backend.api.v1.endpoints import clips, leaderboard, admin, votes, health
 from backend.api.v1.endpoints import auth, following, ai_chat, ai_editor
-from backend.core.database import init_database
+from backend.core.database import init_database, shutdown_database
 from backend.core.state import ConnectionManager
 from backend.core.tasks import start_scheduler, stop_scheduler
 from backend.core import logger as core_logger
@@ -62,6 +62,13 @@ async def lifespan(app: FastAPI):
         logger.info("Background scheduler stopped")
     except Exception as e:
         logger.error(f"Failed to stop scheduler: {e}")
+
+    # Dispose DB connections on shutdown (important for reload)
+    try:
+        await shutdown_database()
+        logger.info("Database engine disposed")
+    except Exception as e:
+        logger.warning(f"Database shutdown skipped: {e}")
 
     logger.info("Shutting down Clipder FastAPI server...")
 

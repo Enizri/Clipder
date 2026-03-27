@@ -7,6 +7,9 @@ import asyncio
 import logging
 from fastapi import WebSocket
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 logger = logging.getLogger(__name__)
@@ -198,11 +201,76 @@ class AppState:
 
         queue = self.category_queues[category]
 
+        # Best-effort: persist any fetched clips into the DB so later endpoints
+        # (e.g. /clip/{clip_id}/video-url) can resolve them by slug.
+        try:
+            from backend.core.database import async_session_maker
+            from backend.models import Clip
+
+            if async_session_maker is not None and queue:
+                async with async_session_maker() as db:
+                    await self._upsert_clips(db, queue)
+        except Exception as e:
+            logger.debug("Clip DB upsert skipped/failed: %s", e)
+
         for clip in queue:
             clip["local_likes"] = self.clip_scores.get(clip["id"], 0)
             clip["comment_count"] = len(self.clip_comments.get(clip["id"], []))
 
         return queue
+
+    async def _upsert_clips(self, db: AsyncSession, clips: List[Dict[str, Any]]) -> None:
+        from backend.models import Clip
+
+        changed = False
+        for clip_data in clips:
+            twitch_clip_id = str(clip_data.get("id") or "").strip()
+            if not twitch_clip_id:
+                continue
+
+            result = await db.execute(select(Clip).where(Clip.twitch_clip_id == twitch_clip_id))
+            clip = result.scalar_one_or_none()
+
+            if clip is None:
+                clip = Clip(
+                    twitch_clip_id=twitch_clip_id,
+                    title=clip_data.get("title") or "",
+                    url=clip_data.get("url") or "",
+                    thumbnail_url=clip_data.get("thumbnail_url") or "",
+                    view_count=int(clip_data.get("view_count") or 0),
+                    creator_name=clip_data.get("creator_name") or "",
+                )
+                db.add(clip)
+                changed = True
+                continue
+
+            # Update missing metadata (don’t stomp existing values with empties)
+            new_url = (clip_data.get("url") or "").strip()
+            if new_url and not (clip.url or "").strip():
+                clip.url = new_url
+                changed = True
+            new_title = (clip_data.get("title") or "").strip()
+            if new_title and not (clip.title or "").strip():
+                clip.title = new_title
+                changed = True
+            new_thumb = (clip_data.get("thumbnail_url") or "").strip()
+            if new_thumb and not (clip.thumbnail_url or "").strip():
+                clip.thumbnail_url = new_thumb
+                changed = True
+            new_creator = (clip_data.get("creator_name") or "").strip()
+            if new_creator and not (clip.creator_name or "").strip():
+                clip.creator_name = new_creator
+                changed = True
+            try:
+                new_views = int(clip_data.get("view_count") or 0)
+                if new_views and (clip.view_count or 0) == 0:
+                    clip.view_count = new_views
+                    changed = True
+            except Exception:
+                pass
+
+        if changed:
+            await db.commit()
 
     async def get_clip(self, clip_id: str) -> Optional[Dict[str, Any]]:
         clip = self.clip_metadata_store.get(clip_id)

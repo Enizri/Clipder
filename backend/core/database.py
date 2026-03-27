@@ -60,6 +60,24 @@ def init_database() -> bool:
         return False
 
 
+async def shutdown_database() -> None:
+    """Dispose DB engine and reset session maker.
+
+    This is important during development with uvicorn `--reload`, where the
+    process is restarted and existing pooled connections may otherwise be
+    terminated noisily.
+    """
+
+    global engine, async_session_maker
+
+    async_session_maker = None
+    if engine is not None:
+        try:
+            await engine.dispose()
+        finally:
+            engine = None
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     if async_session_maker is None:
         if not init_database():

@@ -3,7 +3,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 import httpx
 
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
 from backend.core.state import AppState, get_state
+from backend.core.database import get_db
+from backend.models import Clip
 from backend.schemas.clip import (
     ClipsResponse,
     ClipResponse,
@@ -19,6 +24,7 @@ from backend.schemas.clip import (
 
 router = APIRouter(prefix="/api", tags=["clips"])
 
+#think of moving these to somewhere else
 BTTV_GLOBAL_EMOTES = [
     {
         "code": "PepePls",
@@ -323,8 +329,14 @@ TWITCH_GLOBAL_EMOTES = [
 async def get_clips(
     category: str = "My Streamers",
     state: AppState = Depends(get_state),
+    db: AsyncSession = Depends(get_db),
 ) -> ClipsResponse:
     clips = await state.fetch_clips(category)
+    # Best-effort persist so other endpoints can resolve these clips by slug.
+    try:
+        await state._upsert_clips(db, clips)
+    except Exception:
+        pass
     return ClipsResponse(clips=clips, total=len(clips))
 
 
@@ -338,11 +350,119 @@ async def get_categories(state: AppState = Depends(get_state)) -> CategoryRespon
 async def get_clip_video_url(
     clip_id: str,
     state: AppState = Depends(get_state),
+    db: AsyncSession = Depends(get_db),
 ) -> VideoUrlResponse:
+    # Support three lookup strategies:
+    # 1. Numeric DB ID (primary key)
+    # 2. Twitch clip slug (twitch_clip_id field)
+    # 3. Legacy string ID from AppState.clip_metadata_store
+    try:
+        clip_pk = int(clip_id)
+    except ValueError:
+        clip_pk = None
+
+    clip = None
+
+    # Strategy 1: Try numeric DB lookup
+    if clip_pk is not None:
+        clip = await db.get(Clip, clip_pk)
+
+    # Strategy 2: Try Twitch clip slug lookup if numeric failed
+    if not clip:
+        result = await db.execute(
+            select(Clip).where(Clip.twitch_clip_id == clip_id)
+        )
+        clip = result.scalar_one_or_none()
+
+    # If found in DB, resolve video URL via yt-dlp
+    if clip:
+        try:
+            import yt_dlp
+
+            ydl_opts: Dict[str, Any] = {
+                "format": "best[ext=mp4]/best",
+                "quiet": True,
+                "no_warnings": True,
+            }
+
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(clip.url, download=False)
+                    video_url = info.get("url") if info else None
+
+                    if not video_url and info:
+                        entries = info.get("entries")
+                        if entries:
+                            for entry in entries:
+                                if entry and "url" in entry:
+                                    video_url = entry["url"]
+                                    break
+
+                if video_url:
+                    return VideoUrlResponse(video_url=video_url, title=clip.title)
+            except Exception as ydl_error:
+                # If yt-dlp fails, fall back to returning the Twitch clip URL directly
+                import logging
+                logging.warning(f"yt-dlp extraction failed for {clip.url}: {ydl_error}")
+
+            # Fallback: return Twitch clip URL directly (may not be embeddable, but better than 404)
+            if clip.url:
+                return VideoUrlResponse(video_url=clip.url, title=clip.title)
+
+            raise HTTPException(status_code=404, detail="No video URL found for clip")
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            import logging
+            logging.error(f"Error processing clip {clip_id}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to process clip")
+
+    # Strategy 3: Fall back to legacy AppState cache/metadata store
     result = await state.get_video_url(clip_id)
-    if "error" in result:
-        raise HTTPException(status_code=404, detail=result["error"])
-    return VideoUrlResponse(**result)
+    if "error" not in result:
+        return VideoUrlResponse(**result)
+
+    # Strategy 4: If all else fails, try treating clip_id as a Twitch clip slug
+    # and construct a direct Twitch URL to extract from
+    # Twitch clip URL format: https://www.twitch.tv/[channel]/clip/[slug]
+    # But since we only have the slug, try: https://clips.twitch.tv/[slug]
+    try:
+        import yt_dlp
+        import logging
+
+        # Try direct Twitch clips URL
+        twitch_clip_url = f"https://clips.twitch.tv/{clip_id}"
+        
+        ydl_opts: Dict[str, Any] = {
+            "format": "best[ext=mp4]/best",
+            "quiet": True,
+            "no_warnings": True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info = ydl.extract_info(twitch_clip_url, download=False)
+                video_url = info.get("url") if info else None
+
+                if not video_url and info:
+                    entries = info.get("entries")
+                    if entries:
+                        for entry in entries:
+                            if entry and "url" in entry:
+                                video_url = entry["url"]
+                                break
+
+                if video_url:
+                    return VideoUrlResponse(video_url=video_url, title=clip_id)
+            except Exception as e:
+                logging.debug(f"Could not extract from Twitch clip URL {twitch_clip_url}: {e}")
+
+    except Exception as e:
+        logging.debug(f"Strategy 4 (direct Twitch clip extraction) failed: {e}")
+
+    # All strategies exhausted
+    raise HTTPException(status_code=404, detail="Could not resolve video URL for this clip")
 
 
 @router.post("/clip/{clip_id}/action", response_model=ClipActionResponse)

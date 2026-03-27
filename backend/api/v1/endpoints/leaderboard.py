@@ -82,8 +82,11 @@ async def get_current_leaderboard(
     try:
         result = await db.execute(
             select(Clip)
-            .where(Clip.month_key == current_month)
-            .order_by(desc(Clip.monthly_likes - Clip.monthly_dislikes))
+            .where(
+                (Clip.month_key == current_month)
+                & (Clip.monthly_likes > 0)
+            )
+            .order_by(desc(Clip.monthly_likes))
             .limit(10)
         )
         clips = result.scalars().all()
@@ -111,7 +114,7 @@ async def get_current_leaderboard(
             "title": clip.title,
             "creator": clip.creator_name,
             "likes": clip.monthly_likes,
-            "score": clip.monthly_likes - clip.monthly_dislikes,
+            "score": clip.monthly_likes,
             "thumbnail_url": clip.thumbnail_url,
         }
         for idx, clip in enumerate(clips)

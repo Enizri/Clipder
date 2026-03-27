@@ -12,8 +12,11 @@ interface LeaderboardClip {
 
 // Get WebSocket URL dynamically from current location
 const getWebSocketUrl = (): string => {
-    if (window.location.port === '3000') {
-        return 'ws://localhost:8000/ws/leaderboard';
+    const apiOrigin = (import.meta as any).env?.VITE_API_ORIGIN as string | undefined;
+    const origin = (apiOrigin || '').trim().replace(/\/$/, '');
+    if (origin) {
+        const wsOrigin = origin.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
+        return `${wsOrigin}/ws/leaderboard`;
     }
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${protocol}//${window.location.host}/ws/leaderboard`;
@@ -29,8 +32,10 @@ export const useLeaderboard = () => {
         // Fetch initial leaderboard from API (for persistence on page refresh)
         const fetchInitialLeaderboard = async () => {
             try {
-                const apiUrl = window.location.port === '3000'
-                    ? 'http://localhost:8000/api/v1/leaderboard/current'
+                const apiOrigin = (import.meta as any).env?.VITE_API_ORIGIN as string | undefined;
+                const origin = (apiOrigin || '').trim().replace(/\/$/, '');
+                const apiUrl = origin
+                    ? `${origin}/api/v1/leaderboard/current`
                     : '/api/v1/leaderboard/current';
                 
                 const response = await fetch(apiUrl);

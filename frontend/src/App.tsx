@@ -11,8 +11,21 @@ type EmoteTab = 'twitch' | 'bttv' | '7tv' | 'gifs';
 const videoUrlCache: Record<string, string> = {};
 
 const getSeenClipIds = (): Set<string> => {
-  const stored = localStorage.getItem('seenClipIds');
-  return stored ? new Set(JSON.parse(stored)) : new Set();
+  try {
+    const stored = localStorage.getItem('seenClipIds');
+    if (!stored) return new Set();
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) {
+      console.warn('seenClipIds is not an array, clearing');
+      localStorage.removeItem('seenClipIds');
+      return new Set();
+    }
+    return new Set(parsed);
+  } catch (e) {
+    console.error('Failed to parse seenClipIds:', e);
+    localStorage.removeItem('seenClipIds');
+    return new Set();
+  }
 };
 
 const addSeenClipId = (clipId: string): void => {
@@ -317,7 +330,16 @@ function EmotePicker({ onSelect, onClose }: { onSelect: (url: string, code: stri
         ) : currentEmotes.length > 0 ? (
           currentEmotes.map((emote) => (
             <div key={emote.id} className="emote-option" onClick={() => handleSelect(emote.url, emote.code)} title={emote.code}>
-              <img src={emote.url} alt={emote.code} loading="lazy" />
+              <img
+                src={emote.url}
+                alt={emote.code}
+                loading="lazy"
+                onError={(e) => {
+                  // External emote CDNs can 404 when an emote is deleted/rotated.
+                  // Hide the broken image instead of spamming console/network.
+                  (e.currentTarget as HTMLImageElement).style.display = 'none';
+                }}
+              />
             </div>
           ))
         ) : (
@@ -541,20 +563,28 @@ function App() {
 
   useEffect(() => {
     if (activeTab === 'swipe' && currentCategory) {
-      if (!currentCategory) return;
       setLoading(true);
-      api.getClips(currentCategory).then((data) => {
-        const seenIds = getSeenClipIds();
-        const filteredClips = data.clips.filter(c => !seenIds.has(c.id));
-        setClips(filteredClips);
-        setCurrentIndex(0);
-      }).catch((err) => {
-        console.error('Failed to load clips:', err);
-      }).finally(() => {
-        setLoading(false);
-      });
+      
+      api.getClips(currentCategory)
+        .then((data) => {
+          if (!data?.clips || !Array.isArray(data.clips)) {
+            setClips([]);
+            return;
+          }
+          
+          const seenIds = getSeenClipIds();
+          const newClips = data.clips.filter(c => !seenIds.has(c.id));
+          setClips(newClips);
+          setCurrentIndex(0);
+        })
+        .catch((err) => {
+          console.error('Failed to load clips:', err);
+          setClips([]);
+        })
+        .finally(() => {
+          setLoading(false);
+        });
     } else if (activeTab === 'ai-editor' && user && (user.role === 'PRO' || user.role === 'ADMIN')) {
-      // Only load queue if user is PRO/ADMIN
       loadAdminQueue();
     }
   }, [activeTab, currentCategory, user]);

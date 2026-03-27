@@ -5,10 +5,12 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 
 from backend.core.database import get_db
 from backend.models import User, Clip, Vote, VoteType
 from backend.api.v1.deps import get_current_user
+from backend.core.tasks import job_calculate_top_10
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/votes", tags=["votes"])
@@ -46,34 +48,28 @@ async def like_clip(
         raise HTTPException(status_code=404, detail="Clip not found")
 
     # ==================================================================
-    # STEP 2: Check if user already voted
-    # ==================================================================
-    existing_vote = await db.execute(
-        select(Vote).where(
-            (Vote.user_id == current_user.id) & (Vote.clip_id == clip_id)
-        )
-    )
-    existing = existing_vote.scalar_one_or_none()
-
-    if existing:
-        raise HTTPException(
-            status_code=400, detail="You have already voted on this clip"
-        )
-
-    # ==================================================================
-    # STEP 3: Create vote record
+    # STEP 2: Create vote record (DB-enforced uniqueness)
     # ==================================================================
     vote = Vote(user_id=current_user.id, clip_id=clip_id, vote_type=VoteType.LIKE)
     db.add(vote)
 
-    # ==================================================================
-    # STEP 4: Update monthly_likes counter
-    # ==================================================================
-    clip.monthly_likes += 1
-
-    await db.commit()
+    try:
+        clip.monthly_likes += 1
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=400, detail="You have already voted on this clip"
+        )
 
     logger.info(f"User {current_user.id} liked clip {clip_id}")
+
+    # Trigger an immediate leaderboard refresh + websocket broadcast
+    # (Scheduler still runs every 5 seconds as a fallback.)
+    try:
+        await job_calculate_top_10()
+    except Exception as e:
+        logger.warning(f"Leaderboard refresh failed after like: {e}")
 
     # ==================================================================
     # STEP 5: Return immediate response
@@ -114,34 +110,27 @@ async def dislike_clip(
         raise HTTPException(status_code=404, detail="Clip not found")
 
     # ==================================================================
-    # STEP 2: Check if user already voted
-    # ==================================================================
-    existing_vote = await db.execute(
-        select(Vote).where(
-            (Vote.user_id == current_user.id) & (Vote.clip_id == clip_id)
-        )
-    )
-    existing = existing_vote.scalar_one_or_none()
-
-    if existing:
-        raise HTTPException(
-            status_code=400, detail="You have already voted on this clip"
-        )
-
-    # ==================================================================
-    # STEP 3: Create vote record
+    # STEP 2: Create vote record (DB-enforced uniqueness)
     # ==================================================================
     vote = Vote(user_id=current_user.id, clip_id=clip_id, vote_type=VoteType.DISLIKE)
     db.add(vote)
 
-    # ==================================================================
-    # STEP 4: Update monthly_dislikes counter
-    # ==================================================================
-    clip.monthly_dislikes += 1
-
-    await db.commit()
+    try:
+        clip.monthly_dislikes += 1
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=400, detail="You have already voted on this clip"
+        )
 
     logger.info(f"User {current_user.id} disliked clip {clip_id}")
+
+    # Trigger an immediate leaderboard refresh + websocket broadcast
+    try:
+        await job_calculate_top_10()
+    except Exception as e:
+        logger.warning(f"Leaderboard refresh failed after dislike: {e}")
 
     # ==================================================================
     # STEP 5: Return immediate response
@@ -222,22 +211,7 @@ async def vote_on_clip(
         raise HTTPException(status_code=404, detail="Clip not found")
 
     # ==================================================================
-    # STEP 2: Check if user already voted
-    # ==================================================================
-    existing_vote = await db.execute(
-        select(Vote).where(
-            (Vote.user_id == current_user.id) & (Vote.clip_id == clip_id)
-        )
-    )
-    existing = existing_vote.scalar_one_or_none()
-
-    if existing:
-        raise HTTPException(
-            status_code=400, detail="You have already voted on this clip"
-        )
-
-    # ==================================================================
-    # STEP 3: Create vote record and update counters
+    # STEP 2: Create vote record and update counters (DB-enforced uniqueness)
     # ==================================================================
     vote_enum = VoteType.LIKE if vote_type == "like" else VoteType.DISLIKE
     vote = Vote(user_id=current_user.id, clip_id=clip_id, vote_type=vote_enum)
@@ -248,9 +222,21 @@ async def vote_on_clip(
     else:
         clip.monthly_dislikes += 1
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=400, detail="You have already voted on this clip"
+        )
 
     logger.info(f"User {current_user.id} voted {vote_type} on clip {clip_id}")
+
+    # Trigger an immediate leaderboard refresh + websocket broadcast
+    try:
+        await job_calculate_top_10()
+    except Exception as e:
+        logger.warning(f"Leaderboard refresh failed after vote: {e}")
 
     # ==================================================================
     # STEP 4: Return response matching frontend expectations

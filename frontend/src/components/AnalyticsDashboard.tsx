@@ -95,10 +95,9 @@ export const AnalyticsDashboard: React.FC = () => {
 
   // Memoize API URL builder
   const getApiUrl = useCallback((path: string) => {
-    if (window.location.port === '3000') {
-      return `http://localhost:8000${path}`;
-    }
-    return path;
+    const apiOrigin = (import.meta as any).env?.VITE_API_ORIGIN as string | undefined;
+    const origin = (apiOrigin || '').trim().replace(/\/$/, '');
+    return origin ? `${origin}${path}` : path;
   }, []);
 
   // Memoize trending calculation

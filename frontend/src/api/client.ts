@@ -11,27 +11,29 @@ import type {
   GifResponse,
 } from '../types';
 
-// Determine if running on separate backend (port 8000)
-const getApiBase = (): string => {
-  if (window.location.port === '3000') {
-    return 'http://localhost:8000/api';
-  }
-  return '/api';
+const getConfiguredApiOrigin = (): string | null => {
+  const raw = (import.meta as any).env?.VITE_API_ORIGIN as string | undefined;
+  const value = (raw || '').trim();
+  return value ? value.replace(/\/$/, '') : null;
 };
 
-const getWsBase = (): string => {
-  if (window.location.port === '3000') {
-    return 'ws://localhost:8000';
+// If VITE_API_ORIGIN is set (e.g. http://127.0.0.1:8001), use it.
+// Otherwise default to same-origin (works when you serve frontend through backend/proxy).
+const API_ORIGIN = getConfiguredApiOrigin();
+const API_BASE = API_ORIGIN ? `${API_ORIGIN}/api` : '/api';
+
+const WS_BASE = (() => {
+  if (API_ORIGIN) {
+    return API_ORIGIN.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
   }
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${protocol}//${window.location.host}`;
-};
-
-const API_BASE = getApiBase();
-const WS_BASE = getWsBase();
+})();
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  // Build full URL if using separate backend
+  // Build full URL.
+  // - If caller passes an absolute URL, use it as-is.
+  // - Otherwise treat it as an API path under API_BASE.
   const fullUrl = url.startsWith('http') ? url : `${API_BASE}${url}`;
   
   const token = localStorage.getItem('token');
@@ -89,100 +91,100 @@ export const api = {
     fetchJson('/auth/twitch/unlink', { method: 'DELETE' }),
 
   // Following
-  getFollowing: (): Promise<any[]> => fetchJson('/api/following'),
+  getFollowing: (): Promise<any[]> => fetchJson('/following'),
 
   addFollowing: (streamer_name: string, streamer_id: string): Promise<any> =>
-    fetchJson('/api/following', {
+    fetchJson('/following', {
       method: 'POST',
       body: JSON.stringify({ streamer_name, streamer_id }),
     }),
 
   removeFollowing: (streamer_id: string): Promise<any> =>
-    fetchJson(`/api/following/${streamer_id}`, { method: 'DELETE' }),
+    fetchJson(`/following/${streamer_id}`, { method: 'DELETE' }),
 
-  getTwitchFollows: (): Promise<any[]> => fetchJson('/api/following/twitch/follows'),
+  getTwitchFollows: (): Promise<any[]> => fetchJson('/following/twitch/follows'),
 
   searchChannels: (query: string): Promise<any[]> =>
-    fetchJson(`/api/following/search?q=${encodeURIComponent(query)}`),
+    fetchJson(`/following/search?q=${encodeURIComponent(query)}`),
 
   syncFollows: (): Promise<any> =>
-    fetchJson('/api/following/sync', { method: 'POST' }),
+    fetchJson('/following/sync', { method: 'POST' }),
 
   // Clips
   getClips: (category: string = 'My Streamers'): Promise<ClipsResponse> =>
-    fetchJson<ClipsResponse>(`${API_BASE}/clips?category=${encodeURIComponent(category)}`),
+    fetchJson<ClipsResponse>(`/clips?category=${encodeURIComponent(category)}`),
 
   getCategories: (): Promise<{ categories: string[] }> =>
-    fetchJson(`${API_BASE}/categories`),
+    fetchJson('/categories'),
 
   getVideoUrl: (clipId: string): Promise<VideoUrlResponse> =>
-    fetchJson<VideoUrlResponse>(`${API_BASE}/clip/${clipId}/video-url`),
+    fetchJson<VideoUrlResponse>(`/clip/${clipId}/video-url`),
 
   // Votes (authenticated)
   likeClip: (clipId: string): Promise<ClipActionResponse> =>
-    fetchJson<ClipActionResponse>(`${API_BASE}/votes/clip/${clipId}/vote?vote_type=like`, {
+    fetchJson<ClipActionResponse>(`/votes/clip/${clipId}/vote?vote_type=like`, {
       method: 'POST',
     }),
 
   dislikeClip: (clipId: string): Promise<ClipActionResponse> =>
-    fetchJson<ClipActionResponse>(`${API_BASE}/votes/clip/${clipId}/vote?vote_type=dislike`, {
+    fetchJson<ClipActionResponse>(`/votes/clip/${clipId}/vote?vote_type=dislike`, {
       method: 'POST',
     }),
 
   getClipVotes: (clipId: string): Promise<{ likes: number; dislikes: number }> =>
-    fetchJson(`${API_BASE}/votes/clip/${clipId}/votes`),
+    fetchJson(`/votes/clip/${clipId}/votes`),
 
   // Legacy endpoints (still work without auth)
   legacyLikeClip: (clipId: string): Promise<ClipActionResponse> =>
-    fetchJson<ClipActionResponse>(`${API_BASE}/clip/${clipId}/action`, {
+    fetchJson<ClipActionResponse>(`/clip/${clipId}/action`, {
       method: 'POST',
       body: JSON.stringify({ action: 'like' }),
     }),
 
   legacyDislikeClip: (clipId: string): Promise<ClipActionResponse> =>
-    fetchJson<ClipActionResponse>(`${API_BASE}/clip/${clipId}/action`, {
+    fetchJson<ClipActionResponse>(`/clip/${clipId}/action`, {
       method: 'POST',
       body: JSON.stringify({ action: 'dislike' }),
     }),
 
   getComments: (clipId: string): Promise<Comment[]> =>
-    fetchJson<Comment[]>(`${API_BASE}/clip/${clipId}/comments`),
+    fetchJson<Comment[]>(`/clip/${clipId}/comments`),
 
   postComment: (clipId: string, text: string): Promise<{ status: string; comment: Comment }> =>
-    fetchJson(`${API_BASE}/clip/${clipId}/comments`, {
+    fetchJson(`/clip/${clipId}/comments`, {
       method: 'POST',
       body: JSON.stringify({ text }),
     }),
 
   getLeaderboard: (): Promise<LeaderboardClip[]> =>
-    fetchJson<LeaderboardClip[]>(`${API_BASE}/leaderboard`),
+    fetchJson<LeaderboardClip[]>(`/leaderboard`),
 
   addToQueue: (clipId: string): Promise<QueueStatusResponse> =>
-    fetchJson<QueueStatusResponse>(`${API_BASE}/admin/queue`, {
+    fetchJson<QueueStatusResponse>(`/admin/queue`, {
       method: 'POST',
       body: JSON.stringify({ clip_id: clipId }),
     }),
 
   removeFromQueue: (clipId: string): Promise<QueueStatusResponse> =>
-    fetchJson<QueueStatusResponse>(`${API_BASE}/admin/remove`, {
+    fetchJson<QueueStatusResponse>(`/admin/remove`, {
       method: 'POST',
       body: JSON.stringify({ clip_id: clipId }),
     }),
 
   getAcceptedClips: (): Promise<AdminClip[]> =>
-    fetchJson<AdminClip[]>(`${API_BASE}/accepted`),
+    fetchJson<AdminClip[]>(`/accepted`),
 
   processClips: (clipIds: string[]): Promise<ProcessStatusResponse> =>
-    fetchJson<ProcessStatusResponse>(`${API_BASE}/process`, {
+    fetchJson<ProcessStatusResponse>(`/process`, {
       method: 'POST',
       body: JSON.stringify({ clip_ids: clipIds }),
     }),
 
   getEmotes: (channel?: string): Promise<EmoteResponse> =>
-    fetchJson<EmoteResponse>(`${API_BASE}/emotes${channel ? `?channel=${encodeURIComponent(channel)}` : ''}`),
+    fetchJson<EmoteResponse>(`/emotes${channel ? `?channel=${encodeURIComponent(channel)}` : ''}`),
 
   searchGifs: (query: string, limit?: number): Promise<GifResponse> =>
-    fetchJson<GifResponse>(`${API_BASE}/gifs?q=${encodeURIComponent(query)}${limit ? `&limit=${limit}` : ''}`),
+    fetchJson<GifResponse>(`/gifs?q=${encodeURIComponent(query)}${limit ? `&limit=${limit}` : ''}`),
 
   // AI Editor clip history (PRO only)
   saveClipToHistory: (data: {
@@ -197,21 +199,21 @@ export const api = {
     chat_messages?: Array<{ role: string; content: string; timestamp: string }>;
     edit_history?: Array<{ action: string; timestamp: string; before?: string; after?: string }>;
   }) =>
-    fetchJson(`${API_BASE}/v1/ai-editor/history/save`, {
+    fetchJson('/v1/ai-editor/history/save', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
   getUserClipHistory: (): Promise<any> =>
-    fetchJson(`${API_BASE}/v1/ai-editor/history`),
+    fetchJson('/v1/ai-editor/history'),
 
   deleteClipFromHistory: (clipId: string): Promise<any> =>
-    fetchJson(`${API_BASE}/v1/ai-editor/history/clip/${clipId}`, {
+    fetchJson(`/v1/ai-editor/history/clip/${clipId}`, {
       method: 'DELETE',
     }),
 
   clearAllHistory: (): Promise<any> =>
-    fetchJson(`${API_BASE}/v1/ai-editor/history/clear-all`, {
+    fetchJson('/v1/ai-editor/history/clear-all', {
       method: 'DELETE',
     }),
 };
