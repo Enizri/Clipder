@@ -4,8 +4,8 @@ package-lock.json
 package-lock/
 
 # Build outputs
-dist/
-build/
+# dist/        # Frontend dist tracked for GitHub Pages
+# build/
 
 # Python
 __pycache__/
@@ -17,51 +17,6 @@ __pycache__/
 venv/
 env/
 *.egg-info/
-dist/
-build/
 .ruff_cache/
 sessionsHist
 # Python version
-.python-version
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-logs/
-clip_bot.log
-
-# Credentials & Tokens
-*.pickle
-token.pickle
-cookies*.txt
-credential*.json
-client_secrets.json
-
-# Data files (keep .env.example)
-*.json
-!pyproject.toml
-!.env.example
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-.start.bat
-
-# Temp files
-*.tmp
-*.temp
-nul
-~*
-
-
-tiktok.com_cookies.txt
