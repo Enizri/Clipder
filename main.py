@@ -3,10 +3,13 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api.v1.endpoints import clips, leaderboard, admin
+from backend.api.v1.endpoints import clips, leaderboard, admin, votes
+from backend.api.v1.endpoints import auth, following, ai_chat, ai_editor
+from backend.core.database import init_database
+from backend.core.state import ConnectionManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,6 +21,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Clipder FastAPI server...")
+    try:
+        init_database()
+        logger.info("Database initialized")
+    except Exception as e:
+        logger.warning(f"Database initialization skipped: {e}")
     yield
     logger.info("Shutting down Clipder FastAPI server...")
 
@@ -40,6 +48,22 @@ app.add_middleware(
 app.include_router(clips.router)
 app.include_router(leaderboard.router)
 app.include_router(admin.router)
+app.include_router(auth.router)
+app.include_router(votes.router)
+app.include_router(following.router)
+app.include_router(ai_chat.router)
+app.include_router(ai_editor.router)
+
+
+@app.websocket("/ws/leaderboard")
+async def websocket_leaderboard(websocket: WebSocket):
+    ws_manager = ConnectionManager.get_instance()
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
 
 
 @app.get("/")

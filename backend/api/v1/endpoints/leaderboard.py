@@ -13,3 +13,12 @@ async def get_leaderboard(
 ) -> List[LeaderboardClip]:
     clips = await state.get_leaderboard()
     return clips
+
+
+@router.get("/leaderboard/fresh", response_model=List[LeaderboardClip])
+async def get_leaderboard_fresh(
+    state: AppState = Depends(get_state),
+) -> List[LeaderboardClip]:
+    """Get fresh leaderboard data immediately (for quick updates after votes)."""
+    clips = await state.get_leaderboard()
+    return clips

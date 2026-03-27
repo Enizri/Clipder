@@ -16,62 +16,94 @@ Task: Refactor ClipApp to FastAPI + React/TS/Vite
 - **Auto-Update:** For every new library needed (FastAPI, Uvicorn, Pydantic, React, etc.), you **MUST** execute `uv add [package]`.
 - **Sync:** Ensure `pyproject.toml` and `uv.lock` are always updated **before** writing corresponding code.
 
+### Current Major Dependencies
+- **Backend:** FastAPI (0.135.2+), Uvicorn, SQLAlchemy[asyncio] (2.0.48+), asyncpg (0.31.0+), Alembic (1.18.4+)
+- **Auth:** python-jose[cryptography], bcrypt (5.0.0+), email-validator
+- **Database:** PostgreSQL-compatible via asyncpg + sqlalchemy
+- **API Tools:** httpx, pydantic-settings, pydantic (2.12.5+)
+- **Video Processing:** moviepy, yt-dlp, tiktok-uploader, numpy
+- **Data:** requests, python-dotenv
+- **Frontend:** React, TypeScript, Vite (in frontend/ directory)
+
 ---
 
 ## 1. Core Constraints (DO NOT BREAK)
 
-- **Immutable Core:** `core.py` contains the algorithmic engine. **DO NOT modify** its logic or function signatures. It is the "Source of Truth."
+- **Immutable Core:** `core.py` contains the algorithmic engine (Config, TwitchClient, StateManager, GroqClient, VideoProcessor, YouTubeUploader, TikTokUploader). **DO NOT modify** its logic or function signatures. It is the "Source of Truth."
 - **Dependency Management:** Use `uv`. Every new dependency **MUST** be added via `uv add`. Update `pyproject.toml` accordingly.
-- **State Integrity:** Transition in-memory state from `web_app.py` into a **FastAPI Dependency or Singleton**. Ensure `core.py` and API routes share the same memory space for queues and scores.
+- **State Integrity:** Use `ConnectionManager` singleton in `backend/core/state.py` for WebSocket broadcasting. FastAPI routes access `core.py`'s StateManager via dependency injection. Ensure state is thread-safe and shared across all route handlers.
+- **Database:** PostgreSQL with SQLAlchemy async ORM. Use Alembic for migrations. Environment variable `DATABASE_URL` required (e.g., `postgresql+asyncpg://user:pass@localhost/clipder`).
 
 ---
 
 ## 2. Technical Stack
 
-- **Backend:** FastAPI with Uvicorn. Use `APIRouter` for modularity.
-- **Frontend:** React + TypeScript + Vite.
-- **Communication:** Pure JSON API. No Jinja2/HTML rendering from Python.
-- **Performance:** Replace polling with efficient async endpoints. (Optional: WebSockets for Admin Queue if approved). If you can make the code better, do it—just run tests to show results and explain why it's better.
+- **Backend:** FastAPI with Uvicorn + async handlers. Use `APIRouter` for modularity.
+- **Database:** PostgreSQL with SQLAlchemy async ORM + asyncpg driver. Alembic for schema migrations.
+- **Frontend:** React + TypeScript + Vite. Located in `frontend/` directory.
+- **Communication:** Pure JSON API over HTTP/WebSocket. No Jinja2/HTML templates.
+- **Authentication:** JWT (HS256) + Bcrypt hashing. Twitch OAuth for social login.
+- **Real-time:** WebSocket support via FastAPI for leaderboard streaming (ConnectionManager singleton).
+- **Performance:** All endpoints are `async def`. Use SQLAlchemy async sessions with dependency injection.
+- **Video Processing:** Integrates with `core.py` for clip extraction, transcription (via Groq), and multi-platform uploads (YouTube, TikTok).
 
 ---
 
-## 3. New Directory Structure
+## 3. Actual Directory Structure (CURRENT)
 
 ```
 ClipApp/
-├── pyproject.toml
-├── core.py              # Untouched - Source of Truth
-├── main.py              # FastAPI Entry Point
+├── pyproject.toml                # Dependencies managed with uv
+├── core.py                       # IMMUTABLE: Core engine (TwitchClient, StateManager, etc.)
+├── main.py                       # FastAPI entry point with 7 routers + WebSocket
+├── alembic.ini                   # Database migration config
+├── alembic/
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/                 # Migration scripts (e.g., b7f027ceb621_initial_migration.py)
 ├── backend/
 │   ├── __init__.py
 │   ├── api/
-│   │   ├── __init__.py
 │   │   └── v1/
-│   │       ├── __init__.py
+│   │       ├── deps.py          # Dependency injection (is_pro, get_current_user, etc.)
 │   │       └── endpoints/
-│   │           ├── __init__.py
-│   │           ├── clips.py
-│   │           ├── leaderboard.py
-│   │           └── admin.py
+│   │           ├── auth.py      # Login/Register/Twitch OAuth callback
+│   │           ├── clips.py     # Swipe & Like logic
+│   │           ├── leaderboard.py # Top 10 Monthly, WebSocket broadcast
+│   │           ├── vote.py      # Vote endpoints
+│   │           ├── admin.py     # Pro Playground & Admin queue
+│   │           ├── following.py # Following management
+│   │           └── ai_chat.py   # AI chat/transcription endpoints
 │   ├── core/
-│   │   ├── __init__.py
-│   │   ├── config.py
-│   │   └── state.py
+│   │   ├── config.py            # Pydantic Settings (Twitch OAuth, Supabase, JWT settings)
+│   │   ├── security.py          # JWT & Bcrypt hashing logic
+│   │   ├── database.py          # SQLAlchemy async engine & session setup
+│   │   ├── state.py             # ConnectionManager singleton for WebSocket broadcasting
+│   │   └── twitch_oauth.py      # Twitch OAuth flow helpers
+│   ├── models/
+│   │   ├── user.py              # User model with UserRole enum (USER, PRO, ADMIN)
+│   │   ├── clip.py              # Clip model with month_key & score fields
+│   │   ├── vote.py              # Vote model (user-clip relations)
+│   │   └── user_streamer.py     # UserStreamer model (following relationships)
 │   └── schemas/
-│       ├── __init__.py
-│       ├── clip.py
-│       ├── leaderboard.py
-│       └── admin.py
-└── frontend/            # React/TS Vite Project
-    ├── src/
-    │   ├── api/
-    │   ├── components/
-    │   ├── hooks/
-    │   └── App.tsx
-    └── package.json
+│       ├── admin.py             # Admin Pydantic schemas
+│       ├── clip.py              # Clip response/request schemas
+│       └── leaderboard.py       # Leaderboard response schemas
+├── frontend/                     # React/TS + Vite
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   ├── types.ts             # TypeScript types matching Pydantic schemas
+│   │   ├── api/client.ts        # API client utility
+│   │   ├── components/          # React components
+│   │   └── hooks/               # Custom React hooks
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── index.html
+├── clips_to_process/            # Queue for clips awaiting processing
+├── processed_clips/             # Archived processed clips
+└── .env                         # Environment variables (DO NOT COMMIT)
 ```
-
----
 
 ## 4. Execution Protocol
 
@@ -88,6 +120,49 @@ ClipApp/
 - Convert all synchronous Flask calls to `async def` in FastAPI.
 - Use **Pydantic Schemas** in `backend/schemas/` to define data contracts. Frontend and Backend must be 100% in sync with 0 runtime type bugs.
 - Optimize state management in `state.py` for FastAPI concurrency. Suggest optimizations before implementing.
+
+---
+
+## 5.5 Current API Endpoints (7 Routers)
+
+| Module | Endpoint Route | Purpose |
+|--------|---|---------|
+| **auth.py** | `/api/v1/auth/*` | Login, register, Twitch OAuth callback, token validation |
+| **clips.py** | `/api/v1/clips/*` | Get clips, swipe/like interactions, clip details |
+| **leaderboard.py** | `/api/v1/leaderboard/*` | Top 10 monthly clips with WebSocket broadcasting |
+| **votes.py** | `/api/v1/votes/*` | User vote management (like/unlike clips) |
+| **admin.py** | `/api/v1/admin/*` | Pro playlist upload, admin queue, category management |
+| **following.py** | `/api/v1/following/*` | Add/remove followed streamers |
+| **ai_chat.py** | `/api/v1/ai/*` | AI transcription, chat endpoints |
+
+### WebSocket Endpoint
+- **`/ws/leaderboard`** – Real-time leaderboard updates via `ConnectionManager.broadcast()` singleton
+
+---
+
+## 5.6 Database Models (SQLAlchemy ORM)
+
+**User Model:**
+- id (PK), username, email, password_hash
+- role (Enum: USER, PRO, ADMIN)
+- twitch_id, twitch_username, twitch_access_token, twitch_refresh_token
+- created_at
+
+**Clip Model:**
+- id (PK), twitch_clip_id (unique), title, url, thumbnail_url
+- view_count (BigInteger), creator_name
+- month_key (indexed, format: "YYYY-MM"), score (Float)
+- created_at
+
+**Vote Model:**
+- id (PK), user_id (FK), clip_id (FK)
+- vote_type (e.g., "like", "unlike")
+- created_at
+- Relationship to User & Clip with cascade delete
+
+**UserStreamer Model:**
+- id (PK), user_id (FK), streamer_name, twitch_channel_id
+- Relationship to User with cascade delete
 
 ---
 
@@ -327,14 +402,21 @@ The application should already have `python-dotenv` in its dependencies via `cor
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `TWITCH_CLIENT_ID` | Yes | Twitch OAuth client ID |
-| `TWITCH_CLIENT_SECRET` | Yes | Twitch OAuth client secret |
-| `GROQ_API_KEY` | Yes | Groq API key for transcription/AI |
-| `TWITCH_CHANNELS` | Yes | Comma-separated channel names |
-| `TWITCH_CATEGORIES` | Yes | Comma-separated Twitch category names |
-| `OPUS_CLIP_API_KEY` | No | Opus Clip API key (enables Opus features) |
+| Variable | Required | Description | Example |
+|----------|----------|-------------|---------|
+| `DATABASE_URL` | Yes | PostgreSQL async connection string | `postgresql+asyncpg://user:pass@localhost:5432/clipder` |
+| `TWITCH_CLIENT_ID` | Yes | Twitch OAuth client ID | From Twitch Developer Console |
+| `TWITCH_CLIENT_SECRET` | Yes | Twitch OAuth client secret | From Twitch Developer Console |
+| `TWITCH_REDIRECT_URI` | Yes | OAuth redirect URL | `http://localhost:8000/auth/twitch/callback` |
+| `GROQ_API_KEY` | Yes | Groq API key for transcription/AI | From Groq Console |
+| `TWITCH_CHANNELS` | Yes | Comma-separated channel names | `channel1,channel2,channel3` |
+| `TWITCH_CATEGORIES` | Yes | Comma-separated Twitch category names | `Just Chatting,Valorant,Minecraft` |
+| `SECRET_KEY` | Yes | JWT signing secret (change in production) | Any strong random string |
+| `ALGORITHM` | No | JWT algorithm | `HS256` (default) |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | No | JWT expiration time | `10080` (7 days, default) |
+| `OPUS_CLIP_API_KEY` | No | Opus Clip API key (enables Opus features) | From Opus Clip |
+| `SUPABASE_URL` | No | Supabase project URL (if using Supabase) | From Supabase dashboard |
+| `SUPABASE_ANON_KEY` | No | Supabase anonymous key | From Supabase dashboard |
 
 ---
 
