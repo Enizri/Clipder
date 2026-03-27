@@ -11,7 +11,11 @@ interface LeaderboardClip {
     thumbnail_url: string;
 }
 
-export const Leaderboard: React.FC = () => {
+interface LeaderboardProps {
+    onOpenComments?: (clipId: number, title: string) => void;
+}
+
+export const Leaderboard: React.FC<LeaderboardProps> = ({ onOpenComments }) => {
     const { leaderboard, error } = useLeaderboard();
 
     if (error) return <div className="empty-msg" style={{ color: '#ff6b9d' }}>Error: {error}</div>;
@@ -25,7 +29,11 @@ export const Leaderboard: React.FC = () => {
                 <div className="empty-msg">No clips have been liked yet!<br />Go swipe right to build the leaderboard.</div>
             ) : (
                 leaderboard.map((clip) => (
-                    <MemoizedLeaderboardRow key={clip.clip_id} clip={clip} />
+                    <MemoizedLeaderboardRow 
+                        key={clip.clip_id} 
+                        clip={clip}
+                        onOpenComments={onOpenComments}
+                    />
                 ))
             )}
         </div>
@@ -34,9 +42,17 @@ export const Leaderboard: React.FC = () => {
 
 interface LeaderboardRowProps {
     clip: LeaderboardClip;
+    onOpenComments?: (clipId: number, title: string) => void;
 }
 
-const LeaderboardRow: React.FC<LeaderboardRowProps> = ({ clip }) => {
+const getRankClass = (rank: number): string => {
+    if (rank === 1) return 'rank-1';
+    if (rank === 2) return 'rank-2';
+    if (rank === 3) return 'rank-3';
+    return 'rank-default';
+};
+
+const LeaderboardRow: React.FC<LeaderboardRowProps> = ({ clip, onOpenComments }) => {
     const [isLoading, setIsLoading] = useState(false);
     const [videoSrc, setVideoSrc] = useState<string | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -49,35 +65,36 @@ const LeaderboardRow: React.FC<LeaderboardRowProps> = ({ clip }) => {
         const video = videoRef.current;
         if (!video) return;
 
+        // If already fetched and we have video, just play it
         if (fetchedRef.current && videoSrc) {
             video.volume = volume / 100;
             video.muted = isMuted || volume === 0;
-            video.play().then(() => setIsPlaying(true)).catch(() => {});
+            video.play().catch(() => {});
+            setIsPlaying(true);
             return;
         }
 
+        // If already tried to fetch, don't try again
         if (fetchedRef.current) return;
         fetchedRef.current = true;
 
-        // Try to fetch video URL from API
+        // Fetch video URL from API
         setIsLoading(true);
         try {
-            const response = await fetch(
-                window.location.port === '3000'
-                    ? `http://localhost:8000/api/v1/clips/${clip.clip_id}/video`
-                    : `/api/v1/clips/${clip.clip_id}/video`
-            );
+            const apiUrl = window.location.port === '3000'
+                ? `http://localhost:8000/api/v1/clips/${clip.clip_id}/video`
+                : `/api/v1/clips/${clip.clip_id}/video`;
+            
+            const response = await fetch(apiUrl);
             if (response.ok) {
                 const data = await response.json();
-                if (data.video_url) {
-                    const vid = videoRef.current;
-                    if (vid) {
-                        vid.src = data.video_url;
-                        setVideoSrc(data.video_url);
-                        vid.volume = volume / 100;
-                        vid.muted = isMuted || volume === 0;
-                        vid.play().then(() => setIsPlaying(true)).catch(() => {});
-                    }
+                if (data.video_url && videoRef.current) {
+                    videoRef.current.src = data.video_url;
+                    setVideoSrc(data.video_url);
+                    videoRef.current.volume = volume / 100;
+                    videoRef.current.muted = isMuted || volume === 0;
+                    // Auto-play immediately
+                    videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
                 }
             }
         } catch (e) {
@@ -127,9 +144,7 @@ const LeaderboardRow: React.FC<LeaderboardRowProps> = ({ clip }) => {
 
     return (
         <div className="list-item">
-            <div style={{ fontSize: '1.2em', fontWeight: 900, color: '#888', width: '40px', textAlign: 'center' }}>
-                #{clip.rank}
-            </div>
+            <div className={`rank-badge ${getRankClass(clip.rank)}`}>#{clip.rank}</div>
 
             <div className="thumb-wrapper">
                 <div
@@ -174,9 +189,7 @@ const LeaderboardRow: React.FC<LeaderboardRowProps> = ({ clip }) => {
                         </div>
                     </div>
 
-                    {isLoading && (
-                        <div className="mini-spinner"></div>
-                    )}
+                    {isLoading && <div className="mini-spinner"></div>}
                 </div>
             </div>
 
@@ -187,6 +200,18 @@ const LeaderboardRow: React.FC<LeaderboardRowProps> = ({ clip }) => {
                     <span>{clip.creator}</span>
                     <span>Score: {clip.score.toFixed(0)}</span>
                 </div>
+            </div>
+
+            <div className="action-group">
+                {onOpenComments && (
+                    <button 
+                        className="social-btn" 
+                        onClick={() => onOpenComments(clip.clip_id, clip.title)}
+                        title="View comments"
+                    >
+                        💬
+                    </button>
+                )}
             </div>
         </div>
     );
