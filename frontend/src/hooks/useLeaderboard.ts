@@ -21,33 +21,16 @@ const getWebSocketUrl = (): string => {
 
 export const useLeaderboard = () => {
     const [leaderboard, setLeaderboard] = useState<LeaderboardClip[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false); // Start with false - no initial load
     const [error, setError] = useState<string | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
-        // 1. Fetch initial leaderboard
-        const fetchInitial = async () => {
-            try {
-                const apiUrl = window.location.port === '3000' 
-                    ? 'http://localhost:8000/api/v1/leaderboard/current'
-                    : '/api/v1/leaderboard/current';
-                const response = await fetch(apiUrl);
-                if (!response.ok) throw new Error('Failed to fetch');
-                const data = await response.json();
-                setLeaderboard(data.clips || []);
-                setLoading(false);
-            } catch (err) {
-                console.error('Leaderboard fetch error:', err);
-                setError('Failed to load leaderboard');
-                setLoading(false);
-            }
-        };
+        // Don't fetch initial leaderboard - start empty and wait for first vote to populate
+        setLoading(false);
 
-        fetchInitial();
-
-        // 2. Connect to WebSocket with explicit cleanup
+        // Connect to WebSocket to listen for updates
         const connectWebSocket = () => {
             // Close any existing connection first
             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
