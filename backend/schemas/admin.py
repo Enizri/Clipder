@@ -1,8 +1,10 @@
 from typing import List
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class AdminClip(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     title: str
     url: str
@@ -12,9 +14,6 @@ class AdminClip(BaseModel):
     duration: float
     created_at: str
     channel: str
-
-    class Config:
-        from_attributes = True
 
 
 class AddToQueueRequest(BaseModel):

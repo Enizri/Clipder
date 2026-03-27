@@ -9,7 +9,7 @@ Four main endpoints:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -31,7 +31,7 @@ router = APIRouter(prefix="/api/v1/leaderboard", tags=["leaderboard"])
 
 def get_current_month() -> str:
     """Get current month in YYYY-MM format."""
-    return datetime.utcnow().strftime("%Y-%m")
+    return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
 @router.get("/current")
@@ -79,13 +79,20 @@ async def get_current_leaderboard(
     # ==================================================================
     # STEP 2: Query database if not cached
     # ==================================================================
-    result = await db.execute(
-        select(Clip)
-        .where(Clip.month_key == current_month)
-        .order_by(desc(Clip.monthly_likes - Clip.monthly_dislikes))
-        .limit(10)
-    )
-    clips = result.scalars().all()
+    try:
+        result = await db.execute(
+            select(Clip)
+            .where(Clip.month_key == current_month)
+            .order_by(desc(Clip.monthly_likes - Clip.monthly_dislikes))
+            .limit(10)
+        )
+        clips = result.scalars().all()
+    except Exception as e:
+        logger.error(f"Error querying leaderboard: {e}")
+        return {
+            "month_key": current_month,
+            "clips": [],
+        }
 
     if not clips:
         logger.info(f"No clips found for {current_month}")
@@ -142,33 +149,69 @@ async def get_historical_leaderboard(
             "top_clip_id": 42,
             "top_clip_score": 400
         }
+
+        OR empty response if no data for this month:
+        {
+            "month_key": "2026-02",
+            "final_ranking": [],
+            "total_votes": 0,
+            "total_unique_voters": 0,
+            "top_clip_id": null,
+            "top_clip_score": null,
+            "month_end_date": null
+        }
     """
     # ==================================================================
     # STEP 1: Query leaderboard_monthly_summary
     # ==================================================================
-    result = await db.execute(
-        select(LeaderboardMonthlySummary).where(
-            LeaderboardMonthlySummary.snapshot_month == month_key,
+    try:
+        result = await db.execute(
+            select(LeaderboardMonthlySummary).where(
+                LeaderboardMonthlySummary.snapshot_month == month_key,
+            )
         )
-    )
-    summary = result.scalar_one_or_none()
+        summary = result.scalar_one_or_none()
+    except Exception as e:
+        logger.error(
+            f"Error querying leaderboard_monthly_summary for {month_key}: {e}",
+            exc_info=True,
+        )
+        # Return empty response instead of crashing
+        return {
+            "month_key": month_key,
+            "final_ranking": [],
+            "total_votes": 0,
+            "total_unique_voters": 0,
+            "top_clip_id": None,
+            "top_clip_score": None,
+            "month_end_date": None,
+        }
 
+    # If no summary exists, return empty response
     if not summary:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No leaderboard found for month {month_key}",
-        )
+        logger.debug(f"No leaderboard summary found for {month_key}, returning empty")
+        return {
+            "month_key": month_key,
+            "final_ranking": [],
+            "total_votes": 0,
+            "total_unique_voters": 0,
+            "top_clip_id": None,
+            "top_clip_score": None,
+            "month_end_date": None,
+        }
 
     logger.debug(f"Retrieved historical leaderboard for {month_key}")
 
     return {
         "month_key": month_key,
-        "final_ranking": summary.final_ranking,
-        "total_votes": summary.total_votes,
-        "total_unique_voters": summary.total_unique_voters,
+        "final_ranking": summary.final_ranking or [],
+        "total_votes": summary.total_votes or 0,
+        "total_unique_voters": summary.total_unique_voters or 0,
         "top_clip_id": summary.top_clip_id,
         "top_clip_score": summary.top_clip_score,
-        "month_end_date": summary.month_end_date.isoformat(),
+        "month_end_date": summary.month_end_date.isoformat()
+        if summary.month_end_date
+        else None,
     }
 
 
@@ -199,7 +242,7 @@ async def get_clip_snapshots(
             ...
         ]
     """
-    cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     # ==================================================================
     # STEP 1: Query snapshots
@@ -274,7 +317,7 @@ async def get_trending_clips(
         }
     """
     current_month = get_current_month()
-    cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     # ==================================================================
     # STEP 1: Get all snapshots in time window

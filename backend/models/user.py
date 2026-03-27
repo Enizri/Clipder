@@ -10,6 +10,7 @@ from backend.core.database import Base
 
 if TYPE_CHECKING:
     from backend.models.vote import Vote
+    from backend.models.user_streamer import UserStreamer
 
 
 class UserRole(str, enum.Enum):
@@ -32,7 +33,9 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(
         SQLEnum(UserRole), default=UserRole.USER, nullable=False
     )
-    twitch_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    twitch_id: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, unique=True
+    )
     twitch_username: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     twitch_access_token: Mapped[Optional[str]] = mapped_column(
         String(500), nullable=True
@@ -44,12 +47,13 @@ class User(Base):
         DateTime, default=datetime.utcnow, nullable=False
     )
 
+    # Lazy-load relationships (only load when explicitly accessed)
     votes: Mapped[list["Vote"]] = relationship(
-        "Vote", back_populates="user", cascade="all, delete-orphan", lazy="selectin"
+        "Vote", back_populates="user", cascade="all, delete-orphan", lazy="select"
     )
     streamers: Mapped[list["UserStreamer"]] = relationship(
         "UserStreamer",
         back_populates="user",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="select",
     )

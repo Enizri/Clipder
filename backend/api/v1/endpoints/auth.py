@@ -1,10 +1,12 @@
 import base64
 import json
+import os
 from typing import Dict, Any
+from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBearer
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -48,15 +50,14 @@ class LoginRequest(BaseModel):
 
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     username: str
     email: str
     role: str
     twitch_id: str | None = None
     twitch_username: str | None = None
-
-    class Config:
-        from_attributes = True
 
 
 class TokenResponse(BaseModel):
@@ -175,10 +176,11 @@ async def twitch_callback(
     user.twitch_refresh_token = refresh_token
     await db.commit()
 
-    return HTMLResponse(
-        content=f"<html><head><meta http-equiv='refresh' content='0;url=http://localhost:3000?twitch_linked=true&username={user_info['display_name']}'></head><body><p>Redirecting to app...</p></body></html>",
-        status_code=200,
-    )
+    # Build redirect URL using environment variable + URL encoding
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    params = urlencode({"twitch_linked": "true", "username": user_info["display_name"]})
+
+    return RedirectResponse(url=f"{frontend_url}?{params}", status_code=302)
 
 
 @router.post("/twitch/link")

@@ -1,11 +1,15 @@
 import sys
+import json
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Set
+from datetime import datetime, timezone
 import asyncio
 import logging
 from fastapi import WebSocket
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
@@ -32,10 +36,32 @@ class ConnectionManager:
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to broadcast to client: {e}")
                 disconnected.add(connection)
         for conn in disconnected:
             self.active_connections.discard(conn)
+
+    async def broadcast_leaderboard_changes(self, changes: Dict[str, Any]) -> None:
+        """
+        Broadcast delta-only leaderboard updates (only when rankings change).
+
+        Called by the 5-second job only if rankings have changed.
+        Sends only the changes, not the full list, to save bandwidth.
+
+        Args:
+            changes: Dictionary with:
+                - clips_entered: New clips that entered top 10
+                - clips_exited: Clips that fell out of top 10
+                - position_changes: Clips that moved ranks
+                - top_10: Full current top 10 (for client verification)
+        """
+        message = {
+            "type": "leaderboard_update",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "changes": changes,
+        }
+        await self.broadcast(message)
 
 
 from core import (
@@ -47,8 +73,6 @@ from core import (
     YouTubeUploader,
     TikTokUploader,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class AppState:
@@ -238,23 +262,39 @@ class AppState:
             return {"error": str(e)}
 
     async def action_clip(self, clip_id: str, action: str) -> Dict[str, Any]:
-        if action == "like":
-            self.clip_scores[clip_id] = self.clip_scores.get(clip_id, 0) + 1
+        """Handle legacy clip action (like/dislike swiping).
 
-            leaderboard = await self.get_leaderboard()
-            await self.ws_manager.broadcast(
-                {"type": "leaderboard_update", "data": leaderboard[:10]}
-            )
+        This is the legacy endpoint - swiping cards call this.
+        Modern code should use the votes.py endpoints instead.
+        """
+        try:
+            if action == "like":
+                self.clip_scores[clip_id] = self.clip_scores.get(clip_id, 0) + 1
 
-        for cat in self.category_queues:
-            self.category_queues[cat] = [
-                c for c in self.category_queues[cat] if c["id"] != clip_id
-            ]
+                leaderboard = await self.get_leaderboard()
+                await self.ws_manager.broadcast(
+                    {"type": "leaderboard_update", "data": leaderboard[:10]}
+                )
+            elif action == "dislike":
+                # Just remove the clip from queue
+                pass
 
-        return {
-            "status": "voted",
-            "current_score": self.clip_scores.get(clip_id, 0),
-        }
+            # Remove clip from all category queues (swiped)
+            for cat in self.category_queues:
+                self.category_queues[cat] = [
+                    c for c in self.category_queues[cat] if c["id"] != clip_id
+                ]
+
+            return {
+                "status": "voted",
+                "current_score": self.clip_scores.get(clip_id, 0),
+            }
+        except Exception as e:
+            logger.error(f"Error in action_clip: {e}")
+            return {
+                "status": "error",
+                "current_score": self.clip_scores.get(clip_id, 0),
+            }
 
     async def get_comments(self, clip_id: str) -> List[Dict[str, str]]:
         return self.clip_comments.get(clip_id, [])
@@ -283,6 +323,31 @@ class AppState:
                 ranked_clips.append(clip_info)
 
         ranked_clips.sort(key=lambda x: x["local_likes"], reverse=True)
+
+        # Add rank numbers to each clip for frontend
+        for idx, clip in enumerate(ranked_clips):
+            clip["rank"] = idx + 1
+            IMPORTANT_FIELDS = {
+                "rank",
+                "clip_id",
+                "score",
+                "likes",
+                "title",
+                "creator",
+                "thumbnail_url",
+            }
+            # Ensure required fields exist
+            if "clip_id" not in clip and "id" in clip:
+                clip["clip_id"] = clip["id"]
+            if "score" not in clip:
+                clip["score"] = clip.get("local_likes", 0)
+            if "likes" not in clip:
+                clip["likes"] = clip.get("local_likes", 0)
+            if "title" not in clip:
+                clip["title"] = ""
+            if "creator" not in clip and "creator_name" in clip:
+                clip["creator"] = clip["creator_name"]
+
         return ranked_clips
 
     async def add_to_queue(self, clip_id: str) -> Dict[str, str]:

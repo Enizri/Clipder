@@ -25,7 +25,12 @@ class Clip(Base):
     month_key: Mapped[str] = mapped_column(
         String(7), index=True, nullable=False
     )  # e.g., "2026-03"
-    score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+
+    # Monthly leaderboard tracking (NEW)
+    monthly_likes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    monthly_dislikes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    current_rank: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )

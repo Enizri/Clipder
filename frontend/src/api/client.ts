@@ -11,18 +11,47 @@ import type {
   GifResponse,
 } from '../types';
 
-const API_BASE = '/api';
-const WS_BASE = `ws://${window.location.host}`;
+// Determine if running on separate backend (port 8000)
+const getApiBase = (): string => {
+  if (window.location.port === '3000') {
+    return 'http://localhost:8000/api';
+  }
+  return '/api';
+};
+
+const getWsBase = (): string => {
+  if (window.location.port === '3000') {
+    return 'ws://localhost:8000';
+  }
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}`;
+};
+
+const API_BASE = getApiBase();
+const WS_BASE = getWsBase();
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
+  // Build full URL if using separate backend
+  const fullUrl = url.startsWith('http') ? url : `${API_BASE}${url}`;
+  
   const token = localStorage.getItem('token');
-  const response = await fetch(url, {
+  
+  // Only add auth header if token exists AND endpoint requires it
+  // Most public endpoints don't need auth
+  const headers: any = {
+    'Content-Type': 'application/json',
+    ...options?.headers,
+  };
+  
+  // Only add token for endpoints that need auth (votes, following, admin, ai_chat, ai_editor, auth/me)
+  const requiresAuth = ['/votes', '/following', '/admin', '/ai', '/auth/me'].some(path => fullUrl.includes(path));
+  if (token && requiresAuth) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  const response = await fetch(fullUrl, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options?.headers,
-    },
+    headers,
   });
   if (!response.ok) {
     throw new Error(`API Error: ${response.status}`);

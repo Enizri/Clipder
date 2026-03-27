@@ -1,0 +1,236 @@
+/* Container */
+.leaderboard-container {
+    padding: 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 12px;
+    margin: 20px 0;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.leaderboard-title {
+    text-align: center;
+    color: white;
+    margin: 0 0 20px 0;
+    font-size: 24px;
+    font-weight: bold;
+}
+
+/* List */
+.leaderboard-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Row Base */
+.leaderboard-row {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    border-radius: 8px;
+    background: white;
+    transition: all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+    cursor: pointer;
+    transform: translateX(0);
+}
+
+.leaderboard-row:hover {
+    transform: translateX(8px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Rank Styling */
+.leaderboard-row.rank-gold {
+    background: linear-gradient(135deg, #ffd700 0%, #fff8dc 100%);
+    box-shadow: 0 4px 12px rgba(255, 215, 0, 0.3);
+}
+
+.leaderboard-row.rank-silver {
+    background: linear-gradient(135deg, #c0c0c0 0%, #e8e8e8 100%);
+    box-shadow: 0 4px 12px rgba(192, 192, 192, 0.3);
+}
+
+.leaderboard-row.rank-bronze {
+    background: linear-gradient(135deg, #cd7f32 0%, #daa520 100%);
+    box-shadow: 0 4px 12px rgba(205, 127, 50, 0.3);
+}
+
+.leaderboard-row.rank-default {
+    background: white;
+    border: 1px solid #e0e0e0;
+}
+
+/* Rank Badge */
+.rank-badge {
+    font-weight: bold;
+    font-size: 18px;
+    min-width: 40px;
+    text-align: center;
+    margin-right: 12px;
+    color: #333;
+}
+
+.rank-gold .rank-badge {
+    color: #cc7000;
+}
+
+.rank-silver .rank-badge {
+    color: #666;
+}
+
+.rank-bronze .rank-badge {
+    color: #8b4513;
+}
+
+/* Thumbnail */
+.clip-thumbnail {
+    width: 60px;
+    height: 40px;
+    border-radius: 4px;
+    object-fit: cover;
+    margin-right: 12px;
+    border: 2px solid #ddd;
+}
+
+/* Clip Info */
+.clip-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.clip-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: #333;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.clip-creator {
+    margin: 4px 0 0 0;
+    font-size: 12px;
+    color: #666;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Stats */
+.clip-stats {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-left: 12px;
+}
+
+.likes {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #e74c3c;
+}
+
+.like-icon {
+    font-size: 16px;
+}
+
+.like-count {
+    min-width: 30px;
+    text-align: right;
+}
+
+.score {
+    font-size: 12px;
+    color: #999;
+    min-width: 40px;
+    text-align: right;
+    background: #f5f5f5;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+/* Animations */
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.leaderboard-row {
+    animation: slideIn 0.5s ease-out;
+}
+
+/* Loading & Error */
+.leaderboard-loading,
+.leaderboard-error {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+    font-size: 14px;
+}
+
+.leaderboard-error {
+    color: #e74c3c;
+    background: #fadbd8;
+    border-radius: 8px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .leaderboard-container {
+        padding: 12px;
+        margin: 12px 0;
+    }
+
+    .leaderboard-title {
+        font-size: 20px;
+        margin-bottom: 12px;
+    }
+
+    .leaderboard-row {
+        padding: 8px 12px;
+    }
+
+    .rank-badge {
+        font-size: 16px;
+        min-width: 32px;
+        margin-right: 8px;
+    }
+
+    .clip-thumbnail {
+        width: 48px;
+        height: 32px;
+        margin-right: 8px;
+    }
+
+    .clip-title {
+        font-size: 12px;
+    }
+
+    .clip-creator {
+        font-size: 11px;
+    }
+
+    .clip-stats {
+        gap: 12px;
+        margin-left: 8px;
+    }
+
+    .likes {
+        font-size: 12px;
+    }
+
+    .score {
+        font-size: 11px;
+        min-width: 32px;
+    }
+}

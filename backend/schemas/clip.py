@@ -1,5 +1,5 @@
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class ClipBase(BaseModel):
@@ -15,11 +15,10 @@ class ClipBase(BaseModel):
 
 
 class ClipResponse(ClipBase):
+    model_config = ConfigDict(from_attributes=True)
+
     local_likes: int = 0
     comment_count: int = 0
-
-    class Config:
-        from_attributes = True
 
 
 class ClipsResponse(BaseModel):

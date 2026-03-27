@@ -1,0 +1,235 @@
+# ClipApp Database Query Patterns & Schema Analysis
+
+Analysis Date: March 27, 2026
+Codebase Size: ~1,419 lines of endpoint code + migrations + models
+Database Type: PostgreSQL with SQLAlchemy Async ORM
+
+==============================================================================
+EXECUTIVE SUMMARY
+==============================================================================
+
+This analysis reveals 6 CRITICAL ISSUES and 8 PERFORMANCE CONCERNS:
+
+CRITICAL ISSUES:
+1. Table Naming Mismatch - Models use plural, migrations use singular (SCHEMA BROKEN)
+2. Type Mismatches - Enum columns stored as String instead of ENUM
+3. Column Type Mismatches - ID columns String in DB vs Integer in models
+4. Missing Column - streamer_id missing in user_streamer table
+5. Deprecated ORM Pattern - Using .from_orm() instead of .model_validate()
+6. Foreign Key Inconsistencies - FK constraints don't match actual column types
+
+PERFORMANCE ISSUES:
+1. N+1 Query Problem - No batch loading of follows in sync endpoint
+2. Missing Indexes - No indexes on foreign keys in votes table
+3. Full Table Scans - Vote counting without optimization
+4. Unnecessary Joins - Eager loading may cause over-fetching
+5. Inefficient Vote Counting - Multiple COUNT queries per request
+6. No Query Result Caching - Same data fetched repeatedly
+7. Unoptimized Leaderboard - No pagination, loads all scores
+8. JSON Storage Without Indexing - Edit history/chat stored as Text without JSONB
+
+==============================================================================
+SECTION 1: MODEL VS MIGRATION SCHEMA MISMATCH
+==============================================================================
+
+ISSUE 1.1: CRITICAL TABLE NAMING INCONSISTENCY
+
+Severity: CRITICAL
+Impact: Schema creation failures; ORM queries may not find tables
+
+Models Define (backend/models/*.py):
+- clips table (line 14 in clip.py)
+- votes table (line 22 in vote.py)
+- user_streamers table (line 14 in user_streamer.py)
+- user_clip_history table (line 13 in user_clip_history.py)
+
+Migrations Create (alembic/versions/b7f027ceb621_initial_migration.py):
+- Line 45: Creates SINGULAR 'clip', not 'clips'
+- Line 64: Creates SINGULAR 'vote', not 'votes'
+- Line 78: Creates SINGULAR 'user_streamer', not 'user_streamers'
+
+Database State:
+- Migration creates: clip, vote, user_streamer
+- Models expect: clips, votes, user_streamers
+- Result: ORM queries will FAIL - table not found errors
+
+Recommendation: Update migrations to use PLURAL table names (matches models)
+
+---
+
+ISSUE 1.2: ID COLUMN TYPE MISMATCH
+
+Severity: CRITICAL
+Impact: Foreign key constraint failures; type errors in joins
+
+Model Definitions (backend/models/*.py):
+- clip.py line 16: id: Mapped[int] = mapped_column(Integer, ...)
+- vote.py line 24: id: Mapped[int] = mapped_column(Integer, ...)
+- user_streamer.py line 16: id: Mapped[int] = mapped_column(Integer, ...)
+- user_clip_history.py line 15: id = Column(String, primary_key=True, ...)
+
+Migration Creates (alembic/versions/b7f027ceb621_initial_migration.py):
+- Line 46: sa.Column('id', sa.String(), ...) for clips
+- Line 65: sa.Column('id', sa.String(), ...) for votes
+- Line 79: sa.Column('id', sa.String(), ...) for user_streamer
+
+Database State:
+- Migration: All IDs are String type
+- Models: clip, vote, user_streamer expect Integer
+- Result: Type coercion errors; query failures
+
+---
+
+ISSUE 1.3: MISSING COLUMN IN USER_STREAMER
+
+Severity: HIGH
+Impact: Foreign key constraint fails during migration
+
+Model Definition (backend/models/user_streamer.py, line 21):
+streamer_id: Mapped[str] = mapped_column(String(50), nullable=False)
+
+Migration (alembic/versions/b7f027ceb621_initial_migration.py, line 82):
+'twitch_channel_id' defined in migration (but named differently in model)
+
+Database State:
+- Migration creates: twitch_channel_id (nullable)
+- Model expects: streamer_id (NOT nullable)
+- Result: Column mismatch; ORM won't map the field
+
+---
+
+ISSUE 1.4: ENUM TYPE HANDLING
+
+Severity: HIGH
+Impact: Enum values stored as strings; no database-level validation
+
+Models (backend/models/*.py):
+- user.py line 32: role: Mapped[UserRole] = mapped_column(SQLEnum(UserRole), ...)
+- vote.py line 31: vote_type: Mapped[VoteType] = mapped_column(SQLEnum(VoteType), ...)
+
+Migration (alembic/versions/b7f027ceb621_initial_migration.py):
+- Line 30: sa.Column('role', sa.String(), ...) - stored as String
+- Line 68: sa.Column('vote_type', sa.String(), ...) - stored as String
+
+Analysis:
+- Models use SQLAlchemy's native SQLEnum type
+- Migrations downgrade to String
+- PostgreSQL will NOT enforce enum constraints
+- Query by enum value works but misses database validation
+
+==============================================================================
+SECTION 2: DATABASE QUERY PATTERNS ANALYSIS
+==============================================================================
+
+QUERY PATTERN SUMMARY BY ENDPOINT:
+
+clips.py - Sync with AppState (NO direct DB queries)
+- Queries: 0 direct ORM queries
+- Pattern: All data from in-memory AppState cache
+- Issue: No persistence; data lost on restart
+
+votes.py - Mixed Pattern (In-Memory + ORM)
+- Line 33-34: Query by twitch_clip_id (indexed)
+- Line 57-59: Query user's existing vote (missing indexes on FK)
+- Line 80-85: Vote count aggregation (inefficient COUNT)
+
+auth.py - Simple Pattern (Single queries per lookup)
+- Email/username uniqueness checks (all indexed)
+- Straightforward lookups
+
+following.py - Lookup Pattern
+- Line 49-53: Get user's streamers (missing index on user_id)
+- Line 165-171: Batch duplicate check in sync (N+1 PROBLEM!)
+
+ai_editor.py - History Pattern
+- Line 68-72: Get user's clip history (indexed)
+- Line 95-99: Delete by clip_id + user (missing composite index)
+
+---
+
+MISSING INDEXES:
+
+Table: votes
+- user_id (needed for filtering by user)
+- clip_id (needed for filtering by clip)
+- (user_id, clip_id) composite (needed for uniqueness check)
+
+Table: user_streamer
+- user_id (needed for filtering by user)
+
+Table: user_clip_history
+- (user_id, clip_id) composite (exists as separate indexes)
+
+Table: clips
+- creator_name (for filtering by channel)
+
+==============================================================================
+SECTION 3: N+1 QUERY PROBLEMS
+==============================================================================
+
+PROBLEM 1: Following Sync (following.py, lines 146-180)
+
+Current Code Pattern:
+for follow in follows:  # Could be 100+ follows
+    existing = await db.execute(
+        select(UserStreamer).where(
+            UserStreamer.user_id == current_user.id,
+            UserStreamer.streamer_id == follow["to_id"],
+        )
+    )
+    if not existing.scalar_one_or_none():
+        streamer = UserStreamer(...)
+        db.add(streamer)
+await db.commit()
+
+Queries Executed:
+- 1 query to get follows (external Twitch API)
+- N queries to check existing (N = number of follows, typically 50-100)
+- Total: N+1 queries
+
+OPTIMIZED PATTERN (batch fetch):
+existing_ids = await db.execute(
+    select(UserStreamer.streamer_id).where(
+        UserStreamer.user_id == current_user.id,
+        UserStreamer.streamer_id.in_([f["to_id"] for f in follows])
+    )
+)
+existing_set = set(row[0] for row in existing_ids)
+
+for follow in follows:
+    if follow["to_id"] not in existing_set:
+        streamer = UserStreamer(...)
+        db.add(streamer)
+await db.commit()
+
+Result: Reduces N+1 to 2 total queries
+
+---
+
+PROBLEM 2: Vote Aggregation (votes.py, lines 80-85)
+
+Current Code:
+likes_count = await db.execute(
+    select(func.count(Vote.id)).where(
+        Vote.clip_id == clip.id, Vote.vote_type == VoteType.LIKE
+    )
+)
+current_score = likes_count.scalar() or 0
+
+Issues:
+1. Count query scans all votes then filters by type
+2. Gets leaderboard from AppState (separate from DB)
+3. State and DB can diverge
+
+Optimization:
+- Create partial index on (clip_id) WHERE vote_type = 'like'
+- Or cache result with TTL
+
+==============================================================================
+SECTION 4: FOREIGN KEY & RELATIONSHIP ISSUES
+==============================================================================
+
+FOREIGN KEY TYPE MISMATCHES:
+
+votes table (alembic/versions/b7f027ceb621_initial_migration.py, lines 70-71):
+sa.Fore

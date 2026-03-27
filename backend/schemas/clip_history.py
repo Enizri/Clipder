@@ -1,10 +1,11 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 from typing import List, Optional
 
 
 class ChatMessage(BaseModel):
     """Single message in chat conversation."""
+
     role: str  # 'user' or 'assistant'
     content: str
     timestamp: str
@@ -12,6 +13,7 @@ class ChatMessage(BaseModel):
 
 class EditAction(BaseModel):
     """Single edit action in timeline."""
+
     action: str  # 'title_edit', 'description_edit', 'tag_added', etc.
     timestamp: str
     before: Optional[str] = None
@@ -20,6 +22,7 @@ class EditAction(BaseModel):
 
 class ClipHistoryCreate(BaseModel):
     """Request to save a clip to user history."""
+
     clip_id: str
     clip_title: str
     clip_url: str
@@ -34,6 +37,9 @@ class ClipHistoryCreate(BaseModel):
 
 class ClipHistoryResponse(BaseModel):
     """Response for a single clip in user history."""
+
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     clip_id: str
     clip_title: str
@@ -49,17 +55,16 @@ class ClipHistoryResponse(BaseModel):
     updated_at: datetime
     last_edited_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
-
 
 class UserClipHistoryResponse(BaseModel):
     """Response with list of user's clip history."""
+
     history: List[ClipHistoryResponse] = Field(default_factory=list)
     total: int
 
 
 class DeleteHistoryResponse(BaseModel):
     """Response after deleting a history item."""
+
     status: str
     message: str

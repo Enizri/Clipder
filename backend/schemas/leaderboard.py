@@ -1,8 +1,10 @@
 from typing import List
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class LeaderboardClip(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: str
     title: str
     url: str
@@ -14,9 +16,6 @@ class LeaderboardClip(BaseModel):
     channel: str
     local_likes: int
     comment_count: int
-
-    class Config:
-        from_attributes = True
 
 
 LeaderboardResponse = List[LeaderboardClip]

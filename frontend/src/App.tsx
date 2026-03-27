@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { api, createLeaderboardSocket } from './api/client';
-import type { Clip, LeaderboardClip, AdminClip, Comment, EmoteResponse, GifResponse, User } from './types';
+import { api } from './api/client';
+import type { Clip, AdminClip, Comment, EmoteResponse, GifResponse, User } from './types';
 import { DemoVideo } from './DemoVideo';
+import { Leaderboard } from './components/Leaderboard';
+import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 
-type Tab = 'swipe' | 'leaderboard' | 'admin' | 'profile' | 'ai-editor';
+type Tab = 'swipe' | 'leaderboard' | 'analytics' | 'admin' | 'profile' | 'ai-editor';
 type EmoteTab = 'twitch' | 'bttv' | '7tv' | 'gifs';
 
 const videoUrlCache: Record<string, string> = {};
@@ -216,135 +218,6 @@ const ClipPreview = React.memo(function ClipPreview({ clip, onOpenTheater, child
   );
 });
 
-const MiniThumb = React.memo(function MiniThumb({ clip, onOpenTheater, isHighlighted }: { clip: LeaderboardClip | AdminClip; onOpenTheater: () => void; isHighlighted?: boolean }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [videoSrc, setVideoSrc] = useState<string | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
-  const [volume, setVolume] = useState(5);
-  const [isHovering, setIsHovering] = useState(false);
-
-  const fetchVideoUrl = useCallback(() => {
-    if (videoSrc) return;
-    setIsLoading(true);
-    api.getVideoUrl(clip.id).then((data) => {
-      if (data.video_url) {
-        videoUrlCache[clip.id] = data.video_url;
-        setVideoSrc(data.video_url);
-      }
-    }).catch(() => {})
-      .finally(() => setIsLoading(false));
-  }, [clip.id, videoSrc]);
-
-  useEffect(() => {
-    if (isHovering) {
-      fetchVideoUrl();
-    }
-  }, [isHovering, fetchVideoUrl]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (isHovering && videoSrc) {
-      if (video.readyState >= 2) {
-        video.volume = volume / 100;
-        video.muted = isMuted || volume === 0;
-        video.play().catch(() => {});
-        setIsPlaying(true);
-      } else {
-        const handleCanPlay = () => {
-          if (videoRef.current) {
-            videoRef.current.volume = volume / 100;
-            videoRef.current.muted = isMuted || volume === 0;
-            videoRef.current.play().catch(() => {});
-            setIsPlaying(true);
-          }
-        };
-        video.addEventListener('canplay', handleCanPlay, { once: true });
-        return () => video.removeEventListener('canplay', handleCanPlay);
-      }
-    } else if (!isHovering && video) {
-      video.pause();
-      video.currentTime = 0;
-      setIsPlaying(false);
-    }
-  }, [isHovering, videoSrc, volume, isMuted]);
-
-  const handleMouseEnter = () => {
-    setIsHovering(true);
-  };
-
-  const handleMouseLeave = () => {
-    setIsHovering(false);
-  };
-
-  const togglePlay = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const video = videoRef.current;
-    if (!video || !videoSrc) return;
-    if (isPlaying) {
-      video.pause();
-    } else {
-      video.play().catch(() => {});
-    }
-    setIsPlaying(!isPlaying);
-  };
-
-  const toggleMute = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const newMuted = !isMuted;
-    setIsMuted(newMuted);
-    if (videoRef.current) {
-      videoRef.current.muted = newMuted;
-    }
-  };
-
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    e.stopPropagation();
-    const vol = parseInt(e.target.value);
-    setVolume(vol);
-    if (videoRef.current) {
-      videoRef.current.volume = vol / 100;
-      if (vol === 0) {
-        setIsMuted(true);
-        videoRef.current.muted = true;
-      } else if (isMuted && vol > 0) {
-        setIsMuted(false);
-        videoRef.current.muted = false;
-      }
-    }
-  };
-
-  return (
-    <div
-      className={`thumb-container ${isLoading ? 'loading' : ''} ${isHighlighted ? 'highlighted' : ''}`}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
-    >
-      <img src={clip.thumbnail_url} alt={clip.title} />
-      <div className="mini-spinner"></div>
-      <video ref={videoRef} src={videoSrc || undefined} className={isPlaying ? 'playing' : ''} loop muted playsInline />
-      <div className="mini-controls">
-        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-          <button className="mini-btn" onClick={togglePlay}>{isPlaying ? '⏸' : '▶'}</button>
-          <button className="mini-btn" onClick={toggleMute}>{volume === 0 ? '🔇' : '🔊'}</button>
-          <input 
-            type="range" 
-            className="mini-volume" 
-            min="0" 
-            max="100" 
-            value={volume} 
-            onChange={handleVolumeChange}
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-        <button className="mini-btn" onClick={onOpenTheater}>⛶</button>
-      </div>
-    </div>
-  );
-});
 
 function EmotePicker({ onSelect, onClose }: { onSelect: (url: string, code: string) => void; onClose: () => void }) {
   const [activeTab, setActiveTab] = useState<EmoteTab>('twitch');
@@ -566,8 +439,6 @@ function App() {
   const [categories, setCategories] = useState<string[]>(['My Streamers']);
   const [currentCategory, setCurrentCategory] = useState('My Streamers');
   const [loading, setLoading] = useState(true);
-  const [leaderboard, setLeaderboard] = useState<LeaderboardClip[]>([]);
-  const [prevLeaderboard, setPrevLeaderboard] = useState<Map<string, number>>(new Map());
   const [adminQueue, setAdminQueue] = useState<AdminClip[]>([]);
   const [aiChatMessages, setAiChatMessages] = useState<{ _id?: number; role: 'user' | 'assistant'; content: string; thumbnail_url?: string; video_url?: string; type?: string }[]>([]);
   const [aiInput, setAiInput] = useState('');
@@ -588,19 +459,8 @@ function App() {
   const [showEmotePicker, setShowEmotePicker] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [user, setUser] = useState<User | null>(null);
-  const [wsConnected, setWsConnected] = useState(false);
   const [userSubscription, setUserSubscription] = useState<'free' | 'trial' | 'pro'>('free');
   const [showCategoriesMenu, setShowCategoriesMenu] = useState(false);
-  
-  // Clip editing metadata (TODO: implement setClipEdits updates for edit tracking)
-  const [clipEdits] = useState<{
-    [clipId: string]: {
-      description?: string;
-      tags?: string[];
-      edited_title?: string;
-      edits_made: Array<{ action: string; timestamp: string; before?: string; after?: string }>;
-    };
-  }>({});
 
   const cardRef = useRef<HTMLDivElement>(null);
   const theaterVideoRef = useRef<HTMLVideoElement>(null);
@@ -666,37 +526,12 @@ function App() {
   }, [selectedClipForAi]);
 
   useEffect(() => {
-    if (activeTab === 'leaderboard') {
-      loadLeaderboard();
-      
-      wsRef.current = createLeaderboardSocket(
-        (updatedClips) => {
-          const newLeaderboard = updatedClips.slice(0, 10);
-          
-          const prevPositions = new Map<string, number>();
-          leaderboard.forEach((clip, idx) => {
-            prevPositions.set(clip.id, idx);
-          });
-          setPrevLeaderboard(prevPositions);
-          
-          setLeaderboard(newLeaderboard);
-        },
-        () => {
-          setWsConnected(true);
-        }
-      );
-
-      return () => {
-        wsRef.current?.close();
-        setWsConnected(false);
-      };
-    } else if (activeTab === 'ai-editor') {
+    // Leaderboard tab now handled by <Leaderboard /> component with useLeaderboard hook
+    if (activeTab === 'ai-editor') {
       setAiChatMessages([]);
       wsRef.current?.close();
-      setWsConnected(false);
     } else {
       wsRef.current?.close();
-      setWsConnected(false);
     }
   }, [activeTab]);
 
@@ -736,15 +571,6 @@ function App() {
       setCategories(['My Streamers', ...data.categories]);
     } catch (err) {
       console.error('Failed to load categories:', err);
-    }
-  };
-
-  const loadLeaderboard = async () => {
-    try {
-      const data = await api.getLeaderboard();
-      setLeaderboard(data.slice(0, 10));
-    } catch (err) {
-      console.error('Failed to load leaderboard:', err);
     }
   };
 
@@ -1071,61 +897,6 @@ function App() {
     }
   };
 
-  const handleAddToQueue = async (clip: any) => {
-    // Check if user is PRO
-    if (!user || (user.role !== 'PRO' && user.role !== 'ADMIN')) {
-      alert('❌ Only PRO users can save clips!');
-      return;
-    }
-
-    // Prepare chat messages with timestamps
-    const chatWithTimestamps = aiChatMessages.map(msg => ({
-      role: msg.role,
-      content: msg.content,
-      timestamp: new Date().toISOString(),
-    }));
-    
-    // Get any edits tracked for this clip
-    const clipMetadata = clipEdits[clip.id] || { edits_made: [] };
-    
-    try {
-      // Save to history
-      await api.saveClipToHistory({
-        clip_id: clip.id,
-        clip_title: clip.title,
-        clip_url: clip.url,
-        clip_channel: clip.channel,
-        thumbnail_url: clip.thumbnail_url,
-        clip_description: clipMetadata.description,
-        clip_tags: clipMetadata.tags,
-        edited_title: clipMetadata.edited_title,
-        chat_messages: chatWithTimestamps,
-        edit_history: clipMetadata.edits_made,
-      });
-    } catch (error) {
-      console.error('Error saving:', error);
-    }
-    
-    // Add to queue immediately (deduplicate)
-    setAdminQueue(prev => {
-      const exists = prev.some(c => c.id === clip.id);
-      if (exists) {
-        console.log('⚠️  Clip already in queue, not adding again');
-        return prev;
-      }
-      return [clip, ...prev];
-    });
-    
-    setAiChatMessages([]);
-  };
-
-
-
-  // const handleRemoveFromQueue = async (clipId: string) => {
-  //   await api.removeFromQueue(clipId);
-  //   loadAdminQueue();
-  // };
-
   const handleLogin = (_token: string, userData: User) => {
     setUser(userData);
     // Set subscription based on user role
@@ -1155,9 +926,12 @@ function App() {
         </h1>
         <nav className="nav-tabs">
           <button className={`tab-btn ${activeTab === 'swipe' ? 'active' : ''}`} onClick={() => { setActiveTab('swipe'); setShowCategoriesMenu(false); closeComments(); stopAllVideos(); }}>Swipe & Vote</button>
-          <button className={`tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}`} onClick={() => { setActiveTab('leaderboard'); closeComments(); loadLeaderboard(); stopAllVideos(); }}>
-            Leaderboard {wsConnected && <span className="ws-indicator"></span>}
-          </button>
+           <button className={`tab-btn ${activeTab === 'leaderboard' ? 'active' : ''}`} onClick={() => { setActiveTab('leaderboard'); closeComments(); stopAllVideos(); }}>
+             Leaderboard
+           </button>
+           <button className={`tab-btn ${activeTab === 'analytics' ? 'active' : ''}`} onClick={() => { setActiveTab('analytics'); closeComments(); stopAllVideos(); }}>
+             📊 Analytics
+           </button>
           <button className={`tab-btn ${activeTab === 'ai-editor' ? 'active' : ''}`} onClick={() => { setActiveTab('ai-editor'); closeComments(); stopAllVideos(); }}>🚀 AI Editor</button>
           <button className={`tab-btn ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => { setActiveTab('profile'); closeComments(); stopAllVideos(); }}>Profile</button>
         </nav>
@@ -1335,54 +1109,12 @@ function App() {
 
         <div id="leaderboard" className={`view-section ${activeTab === 'leaderboard' ? 'active' : ''}`}>
           <div className="list-container">
-            <h2 className="section-title">🏆 Top 10 Viral Clips</h2>
-            <div className="section-subtitle">
-              {wsConnected ? (
-                <span className="live-indicator">🔴 LIVE</span>
-              ) : (
-                <span>Live updates enabled when you're on this tab</span>
-              )}
-              {' '}- Hover to preview, or click expand for Theater Mode!
-            </div>
-
-            {leaderboard.length === 0 ? (
-              <div className="empty-msg">No clips have been liked yet!<br />Go swipe right to build the leaderboard.</div>
-            ) : (
-              <div className="leaderboard-list">
-                {leaderboard.map((clip, index) => {
-                  const prevIndex = prevLeaderboard.get(clip.id);
-                  const isMovingUp = prevIndex !== undefined && prevIndex > index;
-                  const isMovingDown = prevIndex !== undefined && prevIndex < index;
-                  const isNew = prevIndex === undefined;
-                  
-                  return (
-                    <div 
-                      key={clip.id} 
-                      className={`list-item ${isMovingUp ? 'moving-up' : ''} ${isMovingDown ? 'moving-down' : ''} ${isNew ? 'new-entry' : ''}`}
-                      style={{ animationDelay: `${index * 50}ms` }}
-                    >
-                      <div className={`rank-badge rank-${index + 1}`}>#{index + 1}</div>
-                      <div className="thumb-wrapper">
-                        <MiniThumb clip={clip} onOpenTheater={() => openTheaterMode(clip.id)} isHighlighted={isMovingUp || isMovingDown || isNew} />
-                      </div>
-                      <div className="item-details">
-                        <div className="item-title">{clip.title}</div>
-                        <div className="item-stats">
-                          <span className="likes-count">♥ {clip.local_likes} Likes</span>
-                          <button className="social-btn" style={{ padding: '2px 8px', fontSize: '1em', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)' }} onClick={() => openComments(clip.id, clip.title)}>💬 {clip.comment_count}</button>
-                          <span>👁 {formatViews(clip.view_count)} views</span>
-                          <span>{clip.channel}</span>
-                        </div>
-                      </div>
-                      {user && (user.role === 'PRO' || user.role === 'ADMIN') && (
-                        <button className="btn-small btn-outline" onClick={() => handleAddToQueue(clip)}>+ Send to Queue</button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            <Leaderboard />
           </div>
+        </div>
+
+        <div id="analytics" className={`view-section ${activeTab === 'analytics' ? 'active' : ''}`}>
+          <AnalyticsDashboard />
         </div>
 
         <div id="ai-editor" className={`view-section ${activeTab === 'ai-editor' ? 'active' : ''}`} style={{ display: 'flex', flexDirection: 'column', padding: '20px', overflow: 'auto', alignItems: 'center' }}>

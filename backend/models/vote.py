@@ -1,7 +1,14 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, Integer, DateTime, ForeignKey, Enum as SQLEnum
+from sqlalchemy import (
+    String,
+    Integer,
+    DateTime,
+    ForeignKey,
+    Enum as SQLEnum,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import enum
@@ -32,6 +39,9 @@ class Vote(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False
     )
+
+    # Unique constraint: User can only vote once per clip
+    __table_args__ = (UniqueConstraint("user_id", "clip_id", name="unique_vote"),)
 
     user: Mapped["User"] = relationship("User", back_populates="votes")
     clip: Mapped["Clip"] = relationship("Clip", back_populates="votes")

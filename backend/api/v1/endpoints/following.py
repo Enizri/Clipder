@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 
@@ -15,12 +15,11 @@ twitch_oauth = TwitchOAuth()
 
 
 class StreamerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     streamer_name: str
     streamer_id: str
-
-    class Config:
-        from_attributes = True
 
 
 class AddStreamerRequest(BaseModel):
@@ -148,7 +147,10 @@ async def sync_with_twitch(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
-    """Sync user's streamers with their Twitch follows"""
+    """Sync user's streamers with their Twitch follows
+
+    Optimized to avoid N+1 queries by batch-loading existing streamers.
+    """
     if not current_user.twitch_id or not current_user.twitch_access_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -160,15 +162,21 @@ async def sync_with_twitch(
         current_user.twitch_id,
     )
 
+    # ==================================================================
+    # OPTIMIZATION: Batch-load all existing streamers for this user
+    # Instead of checking each one individually (N+1 problem)
+    # ==================================================================
+    result = await db.execute(
+        select(UserStreamer.streamer_id).where(UserStreamer.user_id == current_user.id)
+    )
+    existing_streamer_ids = set(row[0] for row in result.all())
+
+    # ==================================================================
+    # Add only new streamers
+    # ==================================================================
     added = 0
     for follow in follows:
-        existing = await db.execute(
-            select(UserStreamer).where(
-                UserStreamer.user_id == current_user.id,
-                UserStreamer.streamer_id == follow["to_id"],
-            )
-        )
-        if not existing.scalar_one_or_none():
+        if follow["to_id"] not in existing_streamer_ids:
             streamer = UserStreamer(
                 user_id=current_user.id,
                 streamer_name=follow["to_name"],
