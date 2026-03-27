@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { useLeaderboard } from '../hooks/useLeaderboard';
+import { api } from '../api/client';
 
 interface LeaderboardClip {
     rank: number;
@@ -85,26 +86,11 @@ const LeaderboardRow: React.FC<LeaderboardRowProps> = ({ clip, onOpenComments })
         // If already fetched successfully, don't fetch again
         if (fetchedRef.current) return;
 
-        // Fetch video URL from API
+        // Fetch video URL from API using proper client
         setIsLoading(true);
         try {
-            const apiOrigin = (import.meta as any).env?.VITE_API_ORIGIN as string | undefined;
-            const origin = (apiOrigin || '').trim().replace(/\/$/, '');
-            const apiUrl = origin
-                ? `${origin}/api/v1/clips/${clip.clip_id}/video-url`
-                : `/api/v1/clips/${clip.clip_id}/video-url`;
+            const data = await api.getVideoUrl(clip.clip_id.toString());
             
-            const response = await fetch(apiUrl);
-            if (!response.ok) {
-                lastFetchFailedAtRef.current = Date.now();
-                if (!warnedRef.current) {
-                    warnedRef.current = true;
-                    console.warn(`Preview unavailable for clip ${clip.clip_id}: ${response.status}`);
-                }
-                return;
-            }
-
-            const data = await response.json();
             if (data.video_url && videoRef.current) {
                 videoRef.current.src = data.video_url;
                 setVideoSrc(data.video_url);

@@ -36,6 +36,8 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   // - Otherwise treat it as an API path under API_BASE.
   const fullUrl = url.startsWith('http') ? url : `${API_BASE}${url}`;
   
+  console.log('📡 API Call:', { fullUrl, method: options?.method || 'GET' });
+  
   const token = localStorage.getItem('token');
   
   // Only add auth header if token exists AND endpoint requires it
@@ -51,14 +53,27 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
     headers['Authorization'] = `Bearer ${token}`;
   }
   
-  const response = await fetch(fullUrl, {
-    ...options,
-    headers,
-  });
-  if (!response.ok) {
-    throw new Error(`API Error: ${response.status}`);
+  try {
+    const response = await fetch(fullUrl, {
+      ...options,
+      headers,
+    });
+    
+    console.log('📨 Response:', { status: response.status, ok: response.ok });
+    
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('❌ Error response body:', text);
+      throw new Error(`API Error: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    console.log('✅ Parsed JSON:', result.clips?.length || result.length || 'unknown');
+    return result;
+  } catch (err) {
+    console.error('🚨 Fetch failed:', err);
+    throw err;
   }
-  return response.json();
 }
 
 export const api = {

@@ -562,23 +562,31 @@ function App() {
   }, []);
 
   useEffect(() => {
+    console.log('📌 useEffect triggered:', { activeTab, currentCategory });
+    
     if (activeTab === 'swipe' && currentCategory) {
+      console.log('✓ Conditions met, loading clips...');
       setLoading(true);
       
       api.getClips(currentCategory)
         .then((data) => {
+          console.log('📨 API Response:', { 
+            hasClips: !!data?.clips,
+            count: data?.clips?.length
+          });
+          
           if (!data?.clips || !Array.isArray(data.clips)) {
+            console.warn('No clips in response:', data);
             setClips([]);
             return;
           }
           
-          const seenIds = getSeenClipIds();
-          const newClips = data.clips.filter(c => !seenIds.has(c.id));
-          setClips(newClips);
+          console.log('✅ Setting', data.clips.length, 'clips');
+          setClips(data.clips);
           setCurrentIndex(0);
         })
         .catch((err) => {
-          console.error('Failed to load clips:', err);
+          console.error('❌ Failed to load clips:', err);
           setClips([]);
         })
         .finally(() => {
@@ -586,6 +594,11 @@ function App() {
         });
     } else if (activeTab === 'ai-editor' && user && (user.role === 'PRO' || user.role === 'ADMIN')) {
       loadAdminQueue();
+    } else {
+      console.log('✗ Conditions not met:', { 
+        isSwipe: activeTab === 'swipe', 
+        hasCategory: !!currentCategory
+      });
     }
   }, [activeTab, currentCategory, user]);
 
