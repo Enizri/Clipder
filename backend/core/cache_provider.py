@@ -143,6 +143,9 @@ def get_cache_provider() -> LeaderboardCache:
 
     Returns:
         Singleton LeaderboardCache instance
+
+    Note: This is a synchronous function because it only returns the singleton instance.
+    FastAPI will handle it correctly both in sync and async contexts.
     """
     global _cache_instance
 

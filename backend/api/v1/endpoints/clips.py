@@ -24,7 +24,7 @@ from backend.schemas.clip import (
 
 router = APIRouter(prefix="/api", tags=["clips"])
 
-#think of moving these to somewhere else
+# think of moving these to somewhere else
 BTTV_GLOBAL_EMOTES = [
     {
         "code": "PepePls",
@@ -346,16 +346,90 @@ async def get_categories(state: AppState = Depends(get_state)) -> CategoryRespon
     return CategoryResponse(categories=categories)
 
 
+@router.get("/clip/{clip_id}/video-stream")
+async def get_clip_video_stream(
+    clip_id: str,
+    state: AppState = Depends(get_state),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream video file with proper CORS headers to bypass frontend CORS issues."""
+    import logging
+    from fastapi.responses import StreamingResponse
+
+    logging.info(f"📥 get_clip_video_stream called with clip_id: {clip_id}")
+
+    try:
+        clip_pk = int(clip_id)
+    except ValueError:
+        clip_pk = None
+
+    clip = None
+    if clip_pk is not None:
+        clip = await db.get(Clip, clip_pk)
+
+    if not clip:
+        result = await db.execute(select(Clip).where(Clip.twitch_clip_id == clip_id))
+        clip = result.scalar_one_or_none()
+
+    if not clip or not clip.url:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Extract video URL using yt-dlp
+    try:
+        import yt_dlp
+
+        ydl_opts: Dict[str, Any] = {
+            "format": "best[ext=mp4]/best",
+            "quiet": True,
+            "no_warnings": True,
+        }
+
+        video_url = None
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(clip.url, download=False)
+            video_url = info.get("url") if info else None
+            if not video_url and info:
+                entries = info.get("entries")
+                if entries:
+                    for entry in entries:
+                        if entry and "url" in entry:
+                            video_url = entry["url"]
+                            break
+
+        if not video_url:
+            raise HTTPException(status_code=404, detail="Could not extract video URL")
+
+        # Proxy stream from video_url
+        async def stream_generator():
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("GET", video_url) as response:
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
+
+        return StreamingResponse(
+            stream_generator(),
+            media_type="video/mp4",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            },
+        )
+
+    except Exception as e:
+        logging.error(f"❌ Failed to stream video: {e}")
+        raise HTTPException(status_code=500, detail="Failed to stream video")
+
+
 @router.get("/clip/{clip_id}/video-url")
 async def get_clip_video_url(
     clip_id: str,
     state: AppState = Depends(get_state),
     db: AsyncSession = Depends(get_db),
 ) -> VideoUrlResponse:
-    # Support three lookup strategies:
-    # 1. Numeric DB ID (primary key)
-    # 2. Twitch clip slug (twitch_clip_id field)
-    # 3. Legacy string ID from AppState.clip_metadata_store
+    """Fast video URL endpoint with caching to avoid yt-dlp slowness."""
+    import logging
+
     try:
         clip_pk = int(clip_id)
     except ValueError:
@@ -369,13 +443,29 @@ async def get_clip_video_url(
 
     # Strategy 2: Try Twitch clip slug lookup if numeric failed
     if not clip:
-        result = await db.execute(
-            select(Clip).where(Clip.twitch_clip_id == clip_id)
-        )
+        result = await db.execute(select(Clip).where(Clip.twitch_clip_id == clip_id))
         clip = result.scalar_one_or_none()
 
-    # If found in DB, resolve video URL via yt-dlp
+    # If found in DB, check cache first
     if clip:
+        from backend.models.clip_video_cache import ClipVideoCache
+
+        # Try to get from cache
+        cache_result = await db.execute(
+            select(ClipVideoCache).where(ClipVideoCache.clip_id == clip.id)
+        )
+        cached = cache_result.scalar_one_or_none()
+
+        if cached:
+            logging.info(f"Video URL cache hit for clip {clip_id}")
+            # Return backend proxy URL instead of direct URL to bypass CORS
+            proxy_url = f"/api/clip/{clip.id}/video-stream"
+            return VideoUrlResponse(
+                video_url=proxy_url, title=cached.title or clip.title
+            )
+
+        # Cache miss - extract using yt-dlp (background task would pre-populate this)
+        logging.info(f"Video URL cache miss for clip {clip_id}, extracting...")
         try:
             import yt_dlp
 
@@ -383,8 +473,10 @@ async def get_clip_video_url(
                 "format": "best[ext=mp4]/best",
                 "quiet": True,
                 "no_warnings": True,
+                "socket_timeout": 5,  # 5 second timeout
             }
 
+            video_url = None
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(clip.url, download=False)
@@ -397,24 +489,33 @@ async def get_clip_video_url(
                                 if entry and "url" in entry:
                                     video_url = entry["url"]
                                     break
-
-                if video_url:
-                    return VideoUrlResponse(video_url=video_url, title=clip.title)
             except Exception as ydl_error:
-                # If yt-dlp fails, fall back to returning the Twitch clip URL directly
-                import logging
                 logging.warning(f"yt-dlp extraction failed for {clip.url}: {ydl_error}")
+                # Fallback to direct URL
+                video_url = clip.url
 
-            # Fallback: return Twitch clip URL directly (may not be embeddable, but better than 404)
-            if clip.url:
-                return VideoUrlResponse(video_url=clip.url, title=clip.title)
+            if video_url:
+                # Cache it for next time
+                try:
+                    new_cache = ClipVideoCache(
+                        clip_id=clip.id, video_url=video_url, title=clip.title
+                    )
+                    db.add(new_cache)
+                    await db.commit()
+                except Exception as cache_err:
+                    logging.debug(f"Failed to cache video URL: {cache_err}")
+                    # Don't fail the request if caching fails
+                    pass
+
+                # Return backend proxy URL instead of direct URL to bypass CORS
+                proxy_url = f"/api/clip/{clip.id}/video-stream"
+                return VideoUrlResponse(video_url=proxy_url, title=clip.title)
 
             raise HTTPException(status_code=404, detail="No video URL found for clip")
 
         except HTTPException:
             raise
         except Exception as e:
-            import logging
             logging.error(f"Error processing clip {clip_id}: {e}")
             raise HTTPException(status_code=500, detail="Failed to process clip")
 
@@ -423,46 +524,10 @@ async def get_clip_video_url(
     if "error" not in result:
         return VideoUrlResponse(**result)
 
-    # Strategy 4: If all else fails, try treating clip_id as a Twitch clip slug
-    # and construct a direct Twitch URL to extract from
-    # Twitch clip URL format: https://www.twitch.tv/[channel]/clip/[slug]
-    # But since we only have the slug, try: https://clips.twitch.tv/[slug]
-    try:
-        import yt_dlp
-        import logging
-
-        # Try direct Twitch clips URL
-        twitch_clip_url = f"https://clips.twitch.tv/{clip_id}"
-        
-        ydl_opts: Dict[str, Any] = {
-            "format": "best[ext=mp4]/best",
-            "quiet": True,
-            "no_warnings": True,
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            try:
-                info = ydl.extract_info(twitch_clip_url, download=False)
-                video_url = info.get("url") if info else None
-
-                if not video_url and info:
-                    entries = info.get("entries")
-                    if entries:
-                        for entry in entries:
-                            if entry and "url" in entry:
-                                video_url = entry["url"]
-                                break
-
-                if video_url:
-                    return VideoUrlResponse(video_url=video_url, title=clip_id)
-            except Exception as e:
-                logging.debug(f"Could not extract from Twitch clip URL {twitch_clip_url}: {e}")
-
-    except Exception as e:
-        logging.debug(f"Strategy 4 (direct Twitch clip extraction) failed: {e}")
-
     # All strategies exhausted
-    raise HTTPException(status_code=404, detail="Could not resolve video URL for this clip")
+    raise HTTPException(
+        status_code=404, detail="Could not resolve video URL for this clip"
+    )
 
 
 @router.post("/clip/{clip_id}/action", response_model=ClipActionResponse)
