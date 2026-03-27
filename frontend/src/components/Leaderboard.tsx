@@ -82,8 +82,8 @@ const LeaderboardRow: React.FC<LeaderboardRowProps> = ({ clip, onOpenComments })
         setIsLoading(true);
         try {
             const apiUrl = window.location.port === '3000'
-                ? `http://localhost:8000/api/v1/clips/${clip.clip_id}/video`
-                : `/api/v1/clips/${clip.clip_id}/video`;
+                ? `http://localhost:8000/api/v1/clips/${clip.clip_id}/video-url`
+                : `/api/v1/clips/${clip.clip_id}/video-url`;
             
             const response = await fetch(apiUrl);
             if (response.ok) {
