@@ -1109,7 +1109,7 @@ function App() {
 
         <div id="leaderboard" className={`view-section ${activeTab === 'leaderboard' ? 'active' : ''}`}>
           <div className="list-container">
-            <Leaderboard />
+            <Leaderboard onOpenComments={(clipId: number, title: string) => openComments(clipId.toString(), title)} />
           </div>
         </div>
 

@@ -21,14 +21,32 @@ const getWebSocketUrl = (): string => {
 
 export const useLeaderboard = () => {
     const [leaderboard, setLeaderboard] = useState<LeaderboardClip[]>([]);
-    const [loading, setLoading] = useState(false); // Start with false - no initial load
     const [error, setError] = useState<string | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
-        // Don't fetch initial leaderboard - start empty and wait for first vote to populate
-        setLoading(false);
+        // Fetch initial leaderboard from API (for persistence on page refresh)
+        const fetchInitialLeaderboard = async () => {
+            try {
+                const apiUrl = window.location.port === '3000'
+                    ? 'http://localhost:8000/api/v1/leaderboard/current'
+                    : '/api/v1/leaderboard/current';
+                
+                const response = await fetch(apiUrl);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.clips && Array.isArray(data.clips)) {
+                        console.log('📋 Initial leaderboard loaded from API:', data.clips);
+                        setLeaderboard(data.clips);
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to fetch initial leaderboard:', err);
+            }
+        };
+
+        fetchInitialLeaderboard();
 
         // Connect to WebSocket to listen for updates
         const connectWebSocket = () => {
@@ -152,5 +170,5 @@ export const useLeaderboard = () => {
         };
     }, []);
 
-    return { leaderboard, loading, error };
+    return { leaderboard, error };
 };
