@@ -43,3 +43,12 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "aiosqlite>=0.22.1",
 ]
+
+[tool.ruff.lint]
+# E402: dotenv must load before app imports (Alembic, one-off scripts).
+# E701/E702/E722: backend/engine.py is immutable legacy style per CLAUDE.md.
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/env.py" = ["E402"]
+"backend/engine.py" = ["E701", "E702", "E722", "F401", "F841"]
+"scripts/db_setup/create_tables.py" = ["E402"]

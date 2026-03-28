@@ -1,4 +1,5 @@
-from http.client import HTTPException
+import io
+from fastapi import HTTPException
 import os
 import json
 import requests
@@ -24,8 +25,11 @@ import yt_dlp
 # ==============================================================================
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
+        # Narrow to TextIOWrapper so the type checker accepts .reconfigure()
+        if isinstance(sys.stdout, io.TextIOWrapper):
+            sys.stdout.reconfigure(encoding='utf-8')
+        if isinstance(sys.stderr, io.TextIOWrapper):
+            sys.stderr.reconfigure(encoding='utf-8')
     except AttributeError:
         import codecs
         sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
@@ -93,9 +97,10 @@ class Config:
         use_opus = opus_key is not None and len(opus_key) > 0
         
         return cls(
-            twitch_client_id=os.getenv("TWITCH_CLIENT_ID"),
-            twitch_client_secret=os.getenv("TWITCH_CLIENT_SECRET"),
-            groq_api_key=os.getenv("GROQ_API_KEY"),
+            # The `missing` check above guarantees these are set; "" satisfies the str type.
+            twitch_client_id=os.getenv("TWITCH_CLIENT_ID", ""),
+            twitch_client_secret=os.getenv("TWITCH_CLIENT_SECRET", ""),
+            groq_api_key=os.getenv("GROQ_API_KEY", ""),
             opus_clip_api_key=opus_key,
             use_opus_clip=use_opus,
             twitch_channels=channels,

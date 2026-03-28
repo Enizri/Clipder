@@ -4,10 +4,8 @@ Critical test: 5 concurrent votes for same clip (race condition check)
 """
 
 import pytest
-import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models import Clip, Vote
 
 
 @pytest.mark.integration
@@ -73,8 +71,8 @@ async def test_five_concurrent_votes(test_db: AsyncSession, test_client, test_cl
     expected_likes = initial_likes + 5
 
     # Allow some margin for timing (responses might show slightly different values)
-    assert last_response_likes >= initial_likes + 4, (
-        f"Expected at least {initial_likes + 4} likes, got {last_response_likes}"
+    assert last_response_likes >= expected_likes - 1, (
+        f"Expected at least {expected_likes - 1} likes, got {last_response_likes}"
     )
 
 

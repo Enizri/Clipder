@@ -3,9 +3,9 @@ Integration tests for leaderboard snapshot job (5-second recalculation).
 """
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models import LeaderboardSnapshot
 
 
 @pytest.mark.integration
@@ -13,7 +13,7 @@ from backend.models import LeaderboardSnapshot
 async def test_snapshot_table_exists(test_db: AsyncSession):
     """Test: Leaderboard snapshots table exists and is queryable"""
 
-    result = await test_db.execute("SELECT COUNT(*) FROM leaderboard_snapshots")
+    result = await test_db.execute(text("SELECT COUNT(*) FROM leaderboard_snapshots"))
     count = result.scalar()
     assert isinstance(count, int)
     assert count >= 0

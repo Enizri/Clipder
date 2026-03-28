@@ -4,10 +4,8 @@ Complete Leaderboard System Test
 Tests all endpoints and verifies the system is working correctly
 """
 
-import asyncio
 from main import app
 from fastapi.testclient import TestClient
-import json
 
 
 def print_header(title):
@@ -41,7 +39,7 @@ def main():
 
         if data["clips"]:
             clip = data["clips"][0]
-            print(f"\n   First Clip:")
+            print("\n   First Clip:")
             print(f"   - Rank: #{clip['rank']}")
             print(f"   - Title: {clip['title']}")
             print(f"   - Creator: {clip['creator']}")
@@ -50,9 +48,9 @@ def main():
 
             # Verify no dislikes exposed
             if "dislikes" in clip:
-                print(f"   ⚠️  WARNING: dislikes exposed (should be hidden)")
+                print("   ⚠️  WARNING: dislikes exposed (should be hidden)")
             else:
-                print(f"   ✅ dislikes hidden (correct)")
+                print("   ✅ dislikes hidden (correct)")
     else:
         print(f"   ❌ Error: {r.text[:200]}")
 
@@ -61,7 +59,7 @@ def main():
     r = client.get("/api/v1/leaderboard/current")
     if r.status_code == 200:
         data = r.json()
-        print(f"   ✅ Response format:")
+        print("   ✅ Response format:")
         print(f"      - month_key: {type(data['month_key']).__name__}")
         print(
             f"      - clips: {type(data['clips']).__name__} with {len(data['clips'])} items"
@@ -82,14 +80,14 @@ def main():
             if missing:
                 print(f"      ❌ Missing fields: {missing}")
             else:
-                print(f"      ✅ All required fields present")
+                print("      ✅ All required fields present")
 
     # Test 4: Clips endpoint
     print("\n4️⃣  Testing Clips Endpoint")
     r = client.get("/api/clips")
     print(f"   Status: {r.status_code}")
     if r.status_code == 200:
-        print(f"   ✅ Clips endpoint working")
+        print("   ✅ Clips endpoint working")
     else:
         print(f"   ❌ Error: {r.text[:100]}")
 
@@ -112,10 +110,10 @@ def main():
         "/api/v1/leaderboard/current", headers={"Origin": "http://localhost:3000"}
     )
     if "access-control-allow-origin" in r.headers:
-        print(f"   ✅ CORS enabled")
+        print("   ✅ CORS enabled")
         print(f"      Allow-Origin: {r.headers['access-control-allow-origin']}")
     else:
-        print(f"   ⚠️  CORS headers not present")
+        print("   ⚠️  CORS headers not present")
 
     # Test 7: Response times
     print("\n7️⃣  Testing Response Times")
@@ -155,9 +153,9 @@ def main():
         data2 = r2.json()
 
         if data1 == data2:
-            print(f"   ✅ Consistent results (cached)")
+            print("   ✅ Consistent results (cached)")
         else:
-            print(f"   ℹ️  Different results (expected if data updated)")
+            print("   ℹ️  Different results (expected if data updated)")
 
     # Summary
     print_header("📊 TEST SUMMARY")

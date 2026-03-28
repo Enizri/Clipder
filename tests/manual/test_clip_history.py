@@ -4,7 +4,6 @@ Tests: Save clip, retrieve history, delete clip, access control.
 """
 import asyncio
 import sys
-import os
 from dotenv import load_dotenv
 
 load_dotenv()

@@ -57,9 +57,9 @@ async def create_admin_user():
         await session.commit()
         
         print("✅ Admin user created successfully!")
-        print(f"   Email: admin@test.com")
-        print(f"   Password: AdminPassword123!")
-        print(f"   Role: ADMIN")
+        print("   Email: admin@test.com")
+        print("   Password: AdminPassword123!")
+        print("   Role: ADMIN")
         
         return True
 
@@ -100,9 +100,9 @@ async def create_pro_user():
         await session.commit()
         
         print("✅ Pro user created successfully!")
-        print(f"   Email: pro@test.com")
-        print(f"   Password: ProPassword123!")
-        print(f"   Role: PRO")
+        print("   Email: pro@test.com")
+        print("   Password: ProPassword123!")
+        print("   Role: PRO")
         
         return True
 

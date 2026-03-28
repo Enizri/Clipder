@@ -12,7 +12,6 @@ from backend.core.database import init_database, shutdown_database
 from backend.core.security import decode_token
 from backend.core.state import ConnectionManager
 from backend.core.tasks import start_scheduler, stop_scheduler
-from backend.core import logger as core_logger
 
 logging.basicConfig(
     level=logging.INFO,
@@ -103,7 +102,7 @@ async def websocket_leaderboard(
     try:
         logger.info(f"WebSocket connect attempt from {websocket.client}")
         await ws_manager.connect(websocket)
-        logger.info(f"✅ WebSocket connected successfully")
+        logger.info("✅ WebSocket connected successfully")
         try:
             while True:
                 data = await websocket.receive_text()
@@ -118,7 +117,7 @@ async def websocket_leaderboard(
         logger.error(f"Failed to accept websocket connection: {e}", exc_info=True)
         try:
             await websocket.close(code=1011, reason=str(e))
-        except:
+        except Exception:
             pass
 
 

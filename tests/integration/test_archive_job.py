@@ -3,6 +3,7 @@ Integration tests for archive and aggregation jobs.
 """
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 async def test_hourly_aggregates_table_exists(test_db: AsyncSession):
     """Test: Leaderboard hourly aggregates table exists"""
 
-    result = await test_db.execute("SELECT COUNT(*) FROM leaderboard_hourly_aggregates")
+    result = await test_db.execute(text("SELECT COUNT(*) FROM leaderboard_hourly_aggregates"))
     count = result.scalar()
     assert isinstance(count, int)
     assert count >= 0
@@ -29,7 +30,7 @@ async def test_snapshots_archived_after_24h(test_db: AsyncSession):
 
     # For now, verify table structure
     result = await test_db.execute(
-        "SELECT column_name FROM information_schema.columns WHERE table_name='leaderboard_hourly_aggregates'"
+        text("SELECT column_name FROM information_schema.columns WHERE table_name='leaderboard_hourly_aggregates'")
     )
     columns = [row[0] for row in result]
     assert len(columns) > 0, "hourly_aggregates table has no columns"

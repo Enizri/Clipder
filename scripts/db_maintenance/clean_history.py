@@ -2,7 +2,6 @@
 Clean all user clip history from database
 """
 import asyncio
-import os
 from dotenv import load_dotenv
 from sqlalchemy import delete
 

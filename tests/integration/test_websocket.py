@@ -20,19 +20,6 @@ async def test_websocket_endpoint_exists():
 async def test_websocket_message_format(test_client):
     """Test: WebSocket delta messages have correct format"""
 
-    # Expected message format
-    expected_format = {
-        "type": "leaderboard_update",
-        "timestamp": str,  # ISO format string
-        "changes": {
-            "clips_entered": list,
-            "clips_exited": list,
-            "position_changes": list,
-            "top_10": list,
-        },
-    }
-
-    # Mock message structure
     mock_message = {
         "type": "leaderboard_update",
         "timestamp": "2026-03-27T15:34:21Z",

@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
 from main import app
-from backend.models import Base, User, Clip, Vote, UserStreamer
+from backend.models import Base, User, Clip
 from backend.core.database import get_db
 from backend.core.config import get_settings
 
