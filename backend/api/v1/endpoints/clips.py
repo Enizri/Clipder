@@ -10,6 +10,7 @@ from backend.core.state import AppState, get_state
 from backend.core.database import get_db
 from backend.models import Clip
 from backend.schemas.clip import (
+    ClipResponse,
     ClipsResponse,
     VideoUrlResponse,
     ClipActionRequest,
@@ -335,7 +336,11 @@ async def get_clips(
         await state._upsert_clips(db, clips)
     except Exception:
         pass
-    return ClipsResponse(clips=clips, total=len(clips))
+    # fetch_clips returns dicts; ClipsResponse expects ClipResponse models.
+    return ClipsResponse(
+        clips=[ClipResponse.model_validate(c) for c in clips],
+        total=len(clips),
+    )
 
 
 @router.get("/categories", response_model=CategoryResponse)
@@ -543,8 +548,9 @@ async def get_comments(
     clip_id: str,
     state: AppState = Depends(get_state),
 ) -> List[Comment]:
-    comments = await state.get_comments(clip_id)
-    return comments
+    raw = await state.get_comments(clip_id)
+    # AppState stores plain dicts; response contract is List[Comment].
+    return [Comment.model_validate(c) for c in raw]
 
 
 class PostCommentRequest(BaseModel):

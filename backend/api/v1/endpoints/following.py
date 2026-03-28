@@ -139,7 +139,7 @@ async def search_channels(
         )
 
     channels = await twitch_oauth.search_channels(q, current_user.twitch_access_token)
-    return [SearchChannelResponse(**c) for c in channels]
+    return [SearchChannelResponse.model_validate(c) for c in channels]
 
 
 @router.post("/sync")

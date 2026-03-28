@@ -20,7 +20,9 @@ try:
     print("\nChecking registered routes...")
     routes = []
     for route in app.routes:
-        routes.append(str(route.path))
+        # Route/Mount/WebSocketRoute have .path; BaseRoute stub does not.
+        p = getattr(route, "path", None)
+        routes.append(str(p) if p is not None else type(route).__name__)
     print(f"✓ Found {len(routes)} routes")
     for route in sorted(routes)[:20]:  # Show first 20
         print(f"  - {route}")

@@ -254,7 +254,7 @@ class Settings(BaseSettings):
 
 Usage everywhere else:
 
-```python
+```
 from backend.core.config import get_settings
 
 settings = get_settings()

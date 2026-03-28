@@ -10,8 +10,9 @@ try:
     print("\nAll registered routes:")
     routes = []
     for route in app.routes:
-        path = str(route.path)
-        routes.append(path)
+        # Route/Mount/WebSocketRoute have .path; BaseRoute stub does not.
+        p = getattr(route, "path", None)
+        routes.append(str(p) if p is not None else type(route).__name__)
     
     # Show all routes sorted
     for route in sorted(routes):

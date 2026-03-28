@@ -6,8 +6,7 @@ import os
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from fastapi.testclient import TestClient
 
 from main import app
@@ -63,7 +62,7 @@ async def test_engine():
 @pytest_asyncio.fixture
 async def test_db(test_engine):
     """Create test database session"""
-    async_session = sessionmaker(
+    async_session = async_sessionmaker(
         test_engine, class_=AsyncSession, expire_on_commit=False
     )
 

@@ -2,8 +2,11 @@
 Clean all user clip history from database
 """
 import asyncio
+from typing import Any, cast
+
 from dotenv import load_dotenv
 from sqlalchemy import delete
+from sqlalchemy.engine import CursorResult
 
 load_dotenv()
 
@@ -24,7 +27,13 @@ async def clean_history():
     async with async_session_maker() as session:
         try:
             result = await session.execute(delete(UserClipHistory))
-            deleted_count = result.rowcount
+            # DML returns CursorResult; generic Result stub has no rowcount.
+            cursor_result = cast(CursorResult[Any], result)
+            deleted_count = (
+                cursor_result.rowcount
+                if cursor_result.rowcount is not None and cursor_result.rowcount >= 0
+                else 0
+            )
             await session.commit()
             print(f"✓ Deleted {deleted_count} history entries")
             return True

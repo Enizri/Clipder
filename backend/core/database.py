@@ -1,5 +1,5 @@
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -13,8 +13,8 @@ class Base(DeclarativeBase):
     pass
 
 
-engine = None
-async_session_maker = None
+engine: Optional[create_async_engine] = None  # type: ignore[valid-type]
+async_session_maker: Optional[async_sessionmaker[AsyncSession]] = None
 
 
 def init_database() -> bool:
@@ -71,7 +71,11 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     if async_session_maker is None:
         if not init_database():
             raise RuntimeError("Database not initialized")
-    async with async_session_maker() as session:
+    # Re-read into a local so the type checker can narrow away None.
+    session_maker = async_session_maker
+    if session_maker is None:
+        raise RuntimeError("Database not initialized")
+    async with session_maker() as session:
         yield session
 
 
@@ -79,5 +83,9 @@ async def create_tables() -> None:
     if engine is None:
         if not init_database():
             return
-    async with engine.begin() as conn:
+    # Re-read into a local so the type checker can narrow away None.
+    db_engine = engine
+    if db_engine is None:
+        return
+    async with db_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

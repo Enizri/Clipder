@@ -6,7 +6,7 @@ Logs all API errors, database errors, and WebSocket events.
 import logging
 import sys
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # Configure root logger
 logging.basicConfig(
@@ -28,27 +28,27 @@ class ContextLogger:
     def __init__(self, name: str):
         self.logger = logging.getLogger(name)
 
-    def info(self, message: str, context: Dict[str, Any] = None):
+    def info(self, message: str, context: Optional[Dict[str, Any]] = None):
         """Log info with optional context"""
         if context:
             message = f"{message} | {context}"
         self.logger.info(message)
 
     def error(
-        self, message: str, context: Dict[str, Any] = None, exc_info: bool = False
+        self, message: str, context: Optional[Dict[str, Any]] = None, exc_info: bool = False
     ):
         """Log error with optional context"""
         if context:
             message = f"{message} | {context}"
         self.logger.error(message, exc_info=exc_info)
 
-    def warning(self, message: str, context: Dict[str, Any] = None):
+    def warning(self, message: str, context: Optional[Dict[str, Any]] = None):
         """Log warning with optional context"""
         if context:
             message = f"{message} | {context}"
         self.logger.warning(message)
 
-    def debug(self, message: str, context: Dict[str, Any] = None):
+    def debug(self, message: str, context: Optional[Dict[str, Any]] = None):
         """Log debug with optional context"""
         if context:
             message = f"{message} | {context}"

@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 import httpx
@@ -112,13 +112,14 @@ class TwitchOAuth:
 
     async def search_channels(
         self, query: str, access_token: str
-    ) -> List[Dict[str, str]]:
+    ) -> List[Dict[str, Any]]:
         url = f"https://api.twitch.tv/helix/search/channels?query={query}"
         headers = {
             "Client-ID": self.client_id,
             "Authorization": f"Bearer {access_token}",
         }
-        channels: List[Dict[str, str]] = []
+        # game_name is str, is_live is bool — not Dict[str, str].
+        channels: List[Dict[str, Any]] = []
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(url, headers=headers)

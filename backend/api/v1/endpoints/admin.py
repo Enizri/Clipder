@@ -1,6 +1,5 @@
-from typing import List
+from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
-
 from backend.api.v1.deps import check_admin
 from backend.core.state import AppState, get_state
 from backend.models import User
@@ -45,8 +44,8 @@ async def get_accepted_clips(
     state: AppState = Depends(get_state),
     _: User = Depends(check_admin),
 ) -> List[AdminClip]:
-    clips = await state.get_accepted_clips()
-    return clips
+    clips: List[Dict[str, Any]] = await state.get_accepted_clips()
+    return [AdminClip(**clip) for clip in clips]
 
 
 @router.post("/admin/process", response_model=ProcessStatusResponse)

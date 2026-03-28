@@ -1,9 +1,10 @@
+from starlette.websockets import WebSocket
+from starlette.datastructures import State
 from typing import Dict, List, Optional, Any, Set
 from datetime import datetime, timezone
 import asyncio
 import logging
 from fastapi import WebSocket
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +15,7 @@ class ConnectionManager:
     _instance: Optional["ConnectionManager"] = None
 
     def __init__(self):
-        self.active_connections: Set[WebSocket] = set()
+        self.active_connections: Set[WebSocket] = set[WebSocket[State]]()
 
     @classmethod
     def get_instance(cls) -> "ConnectionManager":
@@ -168,7 +169,7 @@ class AppState:
 
             valid_clips: List[Dict[str, Any]] = []
             for clip in all_clips:
-                clip_data: Dict[str, Any] = {
+                clip_data = {
                     "id": clip["id"],
                     "title": clip["title"],
                     "url": clip["url"],

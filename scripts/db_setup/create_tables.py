@@ -16,9 +16,13 @@ async def main():
 
     print(f"Connecting to: {database_url[:40]}...")
 
-    connect_args = {"ssl": "require"}
+    # Match backend/core/database.py: Supabase pooler needs ssl + no statement cache.
+    connect_args = {}
     if "pooler" in database_url:
-        connect_args["statement_cache_size"] = 0
+        connect_args = {
+            "ssl": "require",
+            "statement_cache_size": 0,
+        }
 
     engine = create_async_engine(database_url, echo=True, connect_args=connect_args)
 

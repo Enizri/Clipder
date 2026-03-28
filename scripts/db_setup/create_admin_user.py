@@ -8,8 +8,8 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.models import User, UserRole
 from backend.core.security import get_password_hash
@@ -33,10 +33,11 @@ async def create_admin_user():
             "statement_cache_size": 0
         }
     )
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    
+    async_session = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+
     async with async_session() as session:
-        from sqlalchemy import select
         result = await session.execute(select(User).where(User.email == "admin@test.com"))
         existing = result.scalar_one_or_none()
         
@@ -77,10 +78,11 @@ async def create_pro_user():
             "statement_cache_size": 0
         }
     )
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    
+    async_session = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+
     async with async_session() as session:
-        from sqlalchemy import select
         result = await session.execute(select(User).where(User.email == "pro@test.com"))
         existing = result.scalar_one_or_none()
         
