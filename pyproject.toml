@@ -29,6 +29,13 @@ dependencies = [
     "apscheduler>=3.11.2",
 ]
 
+[tool.basedpyright]
+# Root on sys.path for `backend.*` imports; pin venv so the language server resolves site-packages.
+extraPaths = ["."]
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+
 [dependency-groups]
 dev = [
     "ruff>=0.15.8",
