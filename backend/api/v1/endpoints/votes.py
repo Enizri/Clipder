@@ -1,9 +1,10 @@
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 
 from backend.core.database import get_db
 from backend.models import User, Clip, Vote, VoteType
@@ -14,200 +15,43 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/votes", tags=["votes"])
 
 
-@router.post("/like/{clip_id}")
-async def like_clip(
-    clip_id: int = Path(..., gt=0, description="Clip ID must be positive"),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> Dict[str, Any]:
-    """Like a clip and increment monthly_likes counter.
-
-    Returns immediately without waiting for leaderboard update.
-    The 5-second job will recalculate rankings and broadcast via WebSocket.
-
-    Args:
-        clip_id: Clip ID to like
-        current_user: Current authenticated user
-        db: Database session
-
-    Returns:
-        Response with current vote status and counter
-    """
-    # ==================================================================
-    # STEP 1: Get the clip
-    # ==================================================================
-    clip = await db.get(Clip, clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
-
-    # ==================================================================
-    # STEP 2: Create vote record (DB-enforced uniqueness)
-    # ==================================================================
-    vote = Vote(user_id=current_user.id, clip_id=clip_id, vote_type=VoteType.LIKE)
-    db.add(vote)
-
+async def _resolve_clip(clip_id: str, db: AsyncSession) -> Optional[Clip]:
+    """Dual-lookup: try integer PK first, then fall back to twitch_clip_id slug."""
     try:
-        clip.monthly_likes += 1
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(
-            status_code=400, detail="You have already voted on this clip"
-        )
+        pk = int(clip_id)
+        clip = await db.get(Clip, pk)
+        if clip:
+            return clip
+    except ValueError:
+        pass
 
-    logger.info(f"User {current_user.id} liked clip {clip_id}")
-
-    # Trigger an immediate leaderboard refresh + websocket broadcast
-    # (Scheduler still runs every 5 seconds as a fallback.)
-    try:
-        await job_calculate_top_10()
-    except Exception as e:
-        logger.warning(f"Leaderboard refresh failed after like: {e}")
-
-    # ==================================================================
-    # STEP 5: Return immediate response
-    # ==================================================================
-    # Don't wait for leaderboard job - it will run in 5 seconds
-    return {
-        "status": "success",
-        "current_likes": clip.monthly_likes,
-        "current_dislikes": clip.monthly_dislikes,
-        "current_score": clip.monthly_likes - clip.monthly_dislikes,
-    }
-
-
-@router.post("/dislike/{clip_id}")
-async def dislike_clip(
-    clip_id: int = Path(..., gt=0, description="Clip ID must be positive"),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> Dict[str, Any]:
-    """Dislike a clip and increment monthly_dislikes counter.
-
-    Returns immediately without waiting for leaderboard update.
-    The 5-second job will recalculate rankings and broadcast via WebSocket.
-
-    Args:
-        clip_id: Clip ID to dislike
-        current_user: Current authenticated user
-        db: Database session
-
-    Returns:
-        Response with current vote status and counter
-    """
-    # ==================================================================
-    # STEP 1: Get the clip
-    # ==================================================================
-    clip = await db.get(Clip, clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
-
-    # ==================================================================
-    # STEP 2: Create vote record (DB-enforced uniqueness)
-    # ==================================================================
-    vote = Vote(user_id=current_user.id, clip_id=clip_id, vote_type=VoteType.DISLIKE)
-    db.add(vote)
-
-    try:
-        clip.monthly_dislikes += 1
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(
-            status_code=400, detail="You have already voted on this clip"
-        )
-
-    logger.info(f"User {current_user.id} disliked clip {clip_id}")
-
-    # Trigger an immediate leaderboard refresh + websocket broadcast
-    try:
-        await job_calculate_top_10()
-    except Exception as e:
-        logger.warning(f"Leaderboard refresh failed after dislike: {e}")
-
-    # ==================================================================
-    # STEP 5: Return immediate response
-    # ==================================================================
-    # Don't wait for leaderboard job - it will run in 5 seconds
-    return {
-        "status": "success",
-        "current_likes": clip.monthly_likes,
-        "current_dislikes": clip.monthly_dislikes,
-        "current_score": clip.monthly_likes - clip.monthly_dislikes,
-    }
-
-
-@router.get("/clip/{clip_id}/votes")
-async def get_clip_votes(
-    clip_id: int,
-    db: AsyncSession = Depends(get_db),
-) -> Dict[str, Any]:
-    """Get vote counts for a clip.
-
-    Args:
-        clip_id: Clip ID
-        db: Database session
-
-    Returns:
-        Vote counts (likes, dislikes, score)
-    """
-    clip = await db.get(Clip, clip_id)
-
-    if not clip:
-        return {
-            "clip_id": clip_id,
-            "likes": 0,
-            "dislikes": 0,
-            "score": 0,
-        }
-
-    return {
-        "clip_id": clip_id,
-        "likes": clip.monthly_likes,
-        "dislikes": clip.monthly_dislikes,
-        "score": clip.monthly_likes - clip.monthly_dislikes,
-    }
+    result = await db.execute(select(Clip).where(Clip.twitch_clip_id == clip_id))
+    return result.scalar_one_or_none()
 
 
 @router.post("/clip/{clip_id}/vote")
 async def vote_on_clip(
-    clip_id: int,
+    clip_id: str,
     vote_type: str = Query(..., description="Vote type: 'like' or 'dislike'"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
-    """Unified vote endpoint supporting both like and dislike via query parameter.
+    """
+    Unified vote endpoint — accepts both integer PKs and Twitch clip slugs.
 
-    This endpoint is called by the frontend:
-    - POST /api/v1/votes/clip/{clip_id}/vote?vote_type=like
-    - POST /api/v1/votes/clip/{clip_id}/vote?vote_type=dislike
-
-    Args:
-        clip_id: Clip ID to vote on
-        vote_type: 'like' or 'dislike'
-        current_user: Current authenticated user
-        db: Database session
-
-    Returns:
-        Vote status with current clip score
+    Called by the frontend:
+    - POST /api/v1/votes/clip/{id}/vote?vote_type=like
+    - POST /api/v1/votes/clip/{id}/vote?vote_type=dislike
     """
     if vote_type not in ("like", "dislike"):
-        raise HTTPException(
-            status_code=400, detail="vote_type must be 'like' or 'dislike'"
-        )
+        raise HTTPException(status_code=400, detail="vote_type must be 'like' or 'dislike'")
 
-    # ==================================================================
-    # STEP 1: Get the clip
-    # ==================================================================
-    clip = await db.get(Clip, clip_id)
+    clip = await _resolve_clip(clip_id, db)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    # ==================================================================
-    # STEP 2: Create vote record and update counters (DB-enforced uniqueness)
-    # ==================================================================
     vote_enum = VoteType.LIKE if vote_type == "like" else VoteType.DISLIKE
-    vote = Vote(user_id=current_user.id, clip_id=clip_id, vote_type=vote_enum)
+    vote = Vote(user_id=current_user.id, clip_id=clip.id, vote_type=vote_enum)
     db.add(vote)
 
     if vote_type == "like":
@@ -218,26 +62,52 @@ async def vote_on_clip(
     try:
         await db.commit()
     except IntegrityError:
+        # User already voted on this clip — roll back and return current counts as success.
+        # This keeps swiping idempotent: duplicate votes are silently accepted.
         await db.rollback()
-        raise HTTPException(
-            status_code=400, detail="You have already voted on this clip"
-        )
+        fresh = await db.get(Clip, clip.id)
+        if not fresh:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        logger.debug("User %s re-voted %s on clip %s (idempotent)", current_user.id, vote_type, clip.id)
+        return {
+            "status": "success",
+            "clip_id": fresh.id,
+            "current_likes": fresh.monthly_likes,
+            "current_dislikes": fresh.monthly_dislikes,
+            "current_score": fresh.monthly_likes - fresh.monthly_dislikes,
+        }
 
-    logger.info(f"User {current_user.id} voted {vote_type} on clip {clip_id}")
+    logger.info("User %s voted %s on clip %s", current_user.id, vote_type, clip.id)
 
-    # Trigger an immediate leaderboard refresh + websocket broadcast
+    # Trigger immediate leaderboard refresh — scheduler is fallback every 5s
     try:
         await job_calculate_top_10()
     except Exception as e:
-        logger.warning(f"Leaderboard refresh failed after vote: {e}")
+        logger.warning("Leaderboard refresh failed after vote: %s", e)
 
-    # ==================================================================
-    # STEP 4: Return response matching frontend expectations
-    # ==================================================================
     return {
         "status": "success",
-        "clip_id": clip_id,
+        "clip_id": clip.id,
         "current_likes": clip.monthly_likes,
         "current_dislikes": clip.monthly_dislikes,
         "current_score": clip.monthly_likes - clip.monthly_dislikes,
+    }
+
+
+@router.get("/clip/{clip_id}/votes")
+async def get_clip_votes(
+    clip_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Get current vote counts for a clip."""
+    clip = await _resolve_clip(clip_id, db)
+
+    if not clip:
+        return {"clip_id": clip_id, "likes": 0, "dislikes": 0, "score": 0}
+
+    return {
+        "clip_id": clip.id,
+        "likes": clip.monthly_likes,
+        "dislikes": clip.monthly_dislikes,
+        "score": clip.monthly_likes - clip.monthly_dislikes,
     }

@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import String, Integer, DateTime, Enum as SQLEnum, func
+from sqlalchemy import String, Integer, Boolean, DateTime, Enum as SQLEnum, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.core.database import Base
@@ -25,12 +25,17 @@ class User(Base):
     username: Mapped[str] = mapped_column(
         String(50), unique=True, index=True, nullable=False
     )
-    email: Mapped[str] = mapped_column(
-        String(255), unique=True, index=True, nullable=False
-    )
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Twitch-only auth: email and password are no longer required
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     role: Mapped[UserRole] = mapped_column(
         SQLEnum(UserRole), default=UserRole.USER, nullable=False
+    )
+    # PRO tier gating
+    is_pro: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Tracks free AI studio uses before paywall (Phase 2)
+    free_studio_clips_generated: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
     )
     twitch_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, unique=True)
     twitch_username: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

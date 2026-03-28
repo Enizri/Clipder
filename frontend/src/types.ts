@@ -27,8 +27,11 @@ export interface VideoUrlResponse {
   error?: string;
 }
 
-export interface ClipActionResponse {
+export interface VoteResponse {
   status: string;
+  clip_id: number;
+  current_likes: number;
+  current_dislikes: number;
   current_score: number;
 }
 
@@ -94,8 +97,8 @@ export interface EmoteResponse {
 export interface User {
   id: number;
   username: string;
-  email: string;
   role: 'USER' | 'PRO' | 'ADMIN';
+  is_pro: boolean;
   twitch_id: string | null;
   twitch_username: string | null;
 }

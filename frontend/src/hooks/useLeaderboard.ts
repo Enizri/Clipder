@@ -60,32 +60,17 @@ export const useLeaderboard = () => {
           const payload = message.changes ?? message.data;
           if (!payload) return;
 
-          if (Array.isArray(payload)) {
-            setLeaderboard(payload);
+          // When backend sends a full top_10 snapshot, replace state outright.
+          // This avoids drift from missed delta messages (e.g. reconnects).
+          if (payload.top_10 && Array.isArray(payload.top_10)) {
+            setLeaderboard(payload.top_10);
             return;
           }
 
-          setLeaderboard((prev) => {
-            let updated = [...prev];
-
-            if (payload.clips_exited?.length) {
-              const exitedIds = new Set(payload.clips_exited.map((e: any) => e.clip_id));
-              updated = updated.filter((c) => !exitedIds.has(c.clip_id));
-            }
-
-            if (payload.clips_entered?.length) {
-              updated = [...updated, ...payload.clips_entered];
-            }
-
-            if (payload.position_changes?.length) {
-              updated = updated.map((c) => {
-                const change = payload.position_changes.find((ch: any) => ch.clip_id === c.clip_id);
-                return change ? { ...c, rank: change.new_rank, score: change.score } : c;
-              });
-            }
-
-            return [...updated].sort((a, b) => a.rank - b.rank);
-          });
+          // Fallback: apply deltas if top_10 not present (should not happen normally)
+          if (Array.isArray(payload)) {
+            setLeaderboard(payload);
+          }
         } catch {
           // Malformed WS message — ignore
         }

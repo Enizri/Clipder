@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -10,7 +11,7 @@ from backend.api.v1.endpoints import auth, following, ai_chat, ai_editor
 from backend.core.config import get_settings
 from backend.core.database import init_database, shutdown_database
 from backend.core.security import decode_token
-from backend.core.state import ConnectionManager
+from backend.core.state import AppState, ConnectionManager
 from backend.core.tasks import start_scheduler, stop_scheduler
 
 logging.basicConfig(
@@ -36,6 +37,19 @@ async def lifespan(app: FastAPI):
         logger.info("Background scheduler started")
     except Exception as e:
         logger.error(f"Failed to start scheduler: {e}")
+
+    # Warm up AppState (TwitchClient + first clip fetch) in background.
+    # This runs in a thread via run_in_executor so it never blocks the event loop.
+    # By the time the first user request arrives, the cache will likely be warm.
+    async def _warm_app_state() -> None:
+        try:
+            state = await AppState.get_instance()
+            await state.fetch_clips("My Streamers")
+            logger.info("AppState warm-up complete")
+        except Exception as exc:
+            logger.warning("AppState warm-up failed (clips will be served from DB): %s", exc)
+
+    asyncio.create_task(_warm_app_state())
 
     yield
 

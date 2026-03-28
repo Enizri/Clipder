@@ -1,3 +1,13 @@
+[build-system]
+requires = ["hatchling>=1.18.0"]
+build-backend = "hatchling.build"
+
+# Application import path is `backend.*` (see CLAUDE.md). The project name is clipapp
+# but the installable package directory is `backend/`. This makes `uv sync` / editable
+# installs put `backend` on sys.path so scripts and tests can import it without PYTHONPATH hacks.
+[tool.hatch.build.targets.wheel]
+packages = ["backend"]
+
 [project]
 name = "clipapp"
 version = "0.1.0"

@@ -1,9 +1,26 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { api } from '../api/client';
 import { ClipPreview } from '../components/ClipPreview';
+import { TwitchAuthWall } from '../components/TwitchAuthWall';
 import { videoUrlCache } from '../utils/videoCache';
 import { TheaterMode } from '../components/TheaterMode';
 import type { Clip, User } from '../types';
+
+const GUEST_SWIPE_LIMIT = 15;
+
+const getGuestSwipeCount = (): number => {
+  try {
+    return parseInt(localStorage.getItem('guestSwipeCount') || '0', 10);
+  } catch {
+    return 0;
+  }
+};
+
+const incrementGuestSwipeCount = (): number => {
+  const next = getGuestSwipeCount() + 1;
+  localStorage.setItem('guestSwipeCount', String(next));
+  return next;
+};
 
 // ==============================================================================
 // SEEN CLIP PERSISTENCE
@@ -43,6 +60,8 @@ interface SwipePageProps {
 export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) => {
   const [clips, setClips] = useState<Clip[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  // Tracks whether the guest hit the swipe wall (shown as hard block)
+  const [showAuthWall, setShowAuthWall] = useState(false);
   const [categories, setCategories] = useState<string[]>(['My Streamers']);
   const [currentCategory, setCurrentCategory] = useState('My Streamers');
   const [loading, setLoading] = useState(true);
@@ -146,15 +165,19 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
           }).catch(() => {});
         }
 
-        // Record the vote
-        if (direction === 'right') {
-          (user ? api.likeClip(currentClip.id) : api.legacyLikeClip(currentClip.id)).catch(
-            () => {}
-          );
+        if (user) {
+          // Authenticated — votes always count
+          if (direction === 'right') {
+            api.likeClip(currentClip.id).catch(() => {});
+          } else {
+            api.dislikeClip(currentClip.id).catch(() => {});
+          }
         } else {
-          (user ? api.dislikeClip(currentClip.id) : api.legacyDislikeClip(currentClip.id)).catch(
-            () => {}
-          );
+          // Guest — ghost swipe (no API call), track count for auth wall
+          const count = incrementGuestSwipeCount();
+          if (count >= GUEST_SWIPE_LIMIT) {
+            setShowAuthWall(true);
+          }
         }
 
         // Fetch more clips before running out
@@ -296,6 +319,9 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
 
   return (
     <>
+      {/* Hard auth block after 15 guest swipes */}
+      {showAuthWall && <TwitchAuthWall />}
+
       <TheaterMode src={theaterSrc} loading={theaterLoading} onClose={closeTheaterMode} />
 
       <div id="swipe" className="view-section active">

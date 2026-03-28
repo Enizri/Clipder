@@ -103,7 +103,12 @@ class AppState:
         if cls._instance is None:
             async with cls._lock:
                 if cls._instance is None:
-                    cls._instance = cls()
+                    # TwitchClient.__init__ makes blocking sync HTTP calls (engine.py is
+                    # immutable). Run the whole constructor in a thread pool so we never
+                    # stall the event loop while holding the asyncio.Lock.
+                    loop = asyncio.get_event_loop()
+                    cls._instance = await loop.run_in_executor(None, cls)
+        assert cls._instance is not None
         return cls._instance
 
     def _fetch_clips_for_category(self, category_name: str) -> List[Dict[str, Any]]:
@@ -192,21 +197,40 @@ class AppState:
             return valid_clips[:30]
 
     async def fetch_clips(self, category: str = "My Streamers") -> List[Dict[str, Any]]:
+        fresh_fetch = False
+
         if category not in self.category_queues or not self.category_queues[category]:
-            self.category_queues[category] = self._fetch_clips_for_category(category)
+            # _fetch_clips_for_category uses sync `requests` (engine.py).
+            # Run in thread pool so the asyncio event loop stays free.
+            # Cap at 30 s — Twitch API should never take longer than that.
+            loop = asyncio.get_event_loop()
+            try:
+                self.category_queues[category] = await asyncio.wait_for(
+                    loop.run_in_executor(None, self._fetch_clips_for_category, category),
+                    timeout=30.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("fetch_clips timed out after 30 s for category '%s'", category)
+                self.category_queues[category] = []
+            except Exception as exc:
+                # Covers requests.Timeout, requests.ConnectionError, invalid Twitch creds, etc.
+                # Never let a Twitch API failure crash the request — just return empty.
+                logger.warning("fetch_clips failed for category '%s': %s", category, exc)
+                self.category_queues[category] = []
+            fresh_fetch = True
 
         queue = self.category_queues[category]
 
-        # Best-effort: persist any fetched clips into the DB so later endpoints
-        # (e.g. /clip/{clip_id}/video-url) can resolve them by slug.
-        try:
-            from backend.core.database import async_session_maker
+        if fresh_fetch and queue:
+            # Only upsert when we just fetched new clips — not on every cached hit.
+            try:
+                from backend.core.database import async_session_maker
 
-            if async_session_maker is not None and queue:
-                async with async_session_maker() as db:
-                    await self._upsert_clips(db, queue)
-        except Exception as e:
-            logger.debug("Clip DB upsert skipped/failed: %s", e)
+                if async_session_maker is not None:
+                    async with async_session_maker() as db:
+                        await self._upsert_clips(db, queue)
+            except Exception as e:
+                logger.warning("Clip DB upsert skipped/failed in fetch_clips: %s", e)
 
         for clip in queue:
             clip["local_likes"] = self.clip_scores.get(clip["id"], 0)
@@ -278,6 +302,8 @@ class AppState:
         return clip
 
     async def get_video_url(self, clip_id: str) -> Dict[str, Any]:
+        import asyncio
+
         if clip_id in self.video_url_cache:
             cached_url = self.video_url_cache[clip_id]
             if cached_url:
@@ -286,8 +312,8 @@ class AppState:
                     "video_url": cached_url,
                     "title": clip.get("title", "") if clip else "",
                 }
-            elif cached_url is None:
-                return {"error": "No video URL found"}
+            # None in cache means we already tried and failed
+            return {"error": "No video URL found"}
 
         clip = self.clip_metadata_store.get(clip_id)
         if not clip:
@@ -296,33 +322,32 @@ class AppState:
         try:
             import yt_dlp
 
-            ydl_opts: Dict[str, Any] = {
-                "format": "best[ext=mp4]/best",
-                "quiet": True,
-                "no_warnings": True,
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(clip["url"], download=False)
-
-                video_url = info.get("url") if info else None
-
-                if not video_url and info:
-                    entries = info.get("entries")
-                    if entries:
-                        for entry in entries:
+            def _extract() -> Optional[str]:
+                ydl_opts: Dict[str, Any] = {
+                    "format": "best[ext=mp4]/best",
+                    "quiet": True,
+                    "no_warnings": True,
+                    "socket_timeout": 10,
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(clip["url"], download=False)
+                    url = info.get("url") if info else None
+                    if not url and info:
+                        for entry in (info.get("entries") or []):
                             if entry and "url" in entry:
-                                video_url = entry["url"]
-                                break
+                                return entry["url"]
+                    return url
 
-                if video_url:
-                    self.video_url_cache[clip_id] = video_url
-                    return {
-                        "video_url": video_url,
-                        "title": clip["title"],
-                    }
+            # Run blocking yt-dlp in thread pool to keep the event loop free
+            loop = asyncio.get_event_loop()
+            video_url: Optional[str] = await loop.run_in_executor(None, _extract)
 
-                self.video_url_cache[clip_id] = None
-                return {"error": "No video URL found"}
+            if video_url:
+                self.video_url_cache[clip_id] = video_url
+                return {"video_url": video_url, "title": clip["title"]}
+
+            self.video_url_cache[clip_id] = None
+            return {"error": "No video URL found"}
         except Exception as e:
             self.video_url_cache[clip_id] = None
             return {"error": str(e)}

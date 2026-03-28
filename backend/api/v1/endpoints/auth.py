@@ -1,51 +1,21 @@
-import base64
-import json
 from urllib.parse import urlencode
+
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import RedirectResponse
-from fastapi.security import HTTPBearer
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from backend.api.v1.deps import get_current_user
 from backend.core.config import get_settings
 from backend.core.database import get_db
-from backend.core.security import (
-    verify_password,
-    get_password_hash,
-    create_access_token,
-)
+from backend.core.security import create_access_token
 from backend.core.twitch_oauth import TwitchOAuth
-from backend.models import User, UserRole, UserStreamer
+from backend.models import User, UserRole
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
-security = HTTPBearer()
 
 twitch_oauth = TwitchOAuth()
-
-
-def encode_state(user_id: int) -> str:
-    return base64.b64encode(json.dumps({"user_id": user_id}).encode()).decode()
-
-
-def decode_state(state: str) -> int | None:
-    try:
-        data = json.loads(base64.b64decode(state.encode()).decode())
-        return data.get("user_id")
-    except Exception:
-        return None
-
-
-class RegisterRequest(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
 
 
 class UserResponse(BaseModel):
@@ -53,84 +23,26 @@ class UserResponse(BaseModel):
 
     id: int
     username: str
-    email: str
     role: str
+    is_pro: bool
     twitch_id: str | None = None
     twitch_username: str | None = None
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    user: UserResponse
 
 
 class TwitchLoginResponse(BaseModel):
     authorization_url: str
 
 
-class TwitchLinkRequest(BaseModel):
-    code: str
-
-
-@router.post("/register", response_model=TokenResponse)
-async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == request.email))
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
-        )
-
-    result = await db.execute(select(User).where(User.username == request.username))
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Username already taken"
-        )
-
-    user = User(
-        username=request.username,
-        email=request.email,
-        password_hash=get_password_hash(request.password),
-        role=UserRole.USER,
-    )
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-
-    access_token = create_access_token(data={"sub": str(user.id)})
-
-    return TokenResponse(
-        access_token=access_token, user=UserResponse.model_validate(user)
-    )
-
-
-@router.post("/login", response_model=TokenResponse)
-async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == request.email))
-    user = result.scalar_one_or_none()
-
-    if not user or not verify_password(request.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
-        )
-
-    access_token = create_access_token(data={"sub": str(user.id)})
-
-    return TokenResponse(
-        access_token=access_token, user=UserResponse.model_validate(user)
-    )
-
-
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_user)):
+async def get_me(current_user: User = Depends(get_current_user)) -> UserResponse:
+    """Return the currently authenticated user from the JWT."""
     return UserResponse.model_validate(current_user)
 
 
 @router.get("/twitch/login", response_model=TwitchLoginResponse)
-async def twitch_login(current_user: User = Depends(get_current_user)):
-    """Get Twitch OAuth authorization URL for the current logged-in user"""
-    state = encode_state(current_user.id)
-    auth_url = twitch_oauth.get_authorization_url(state)
+async def twitch_login() -> TwitchLoginResponse:
+    """Return the Twitch OAuth authorization URL — no auth required."""
+    auth_url = twitch_oauth.get_authorization_url(state="")
     return TwitchLoginResponse(authorization_url=auth_url)
 
 
@@ -139,104 +51,67 @@ async def twitch_callback(
     code: str = Query(...),
     state: str = Query(""),
     db: AsyncSession = Depends(get_db),
-):
-    """Handle Twitch OAuth callback - links Twitch account to user"""
-    user_id = decode_state(state)
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid state parameter. Please try again.",
-        )
+) -> RedirectResponse:
+    """
+    Twitch OAuth callback — create-or-return flow.
 
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User not found. Please login first.",
-        )
-
+    1. Exchange code for Twitch token
+    2. Fetch Twitch user info (id, display_name)
+    3. Find existing user by twitch_id; create new one if not found
+    4. Issue JWT and redirect to frontend with ?token=<jwt>
+    """
     token_data = await twitch_oauth.exchange_code_for_token(code)
     if not token_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to exchange code for token",
+            detail="Failed to exchange code for Twitch token",
         )
 
-    access_token = token_data.get("access_token") or ""
-    refresh_token = token_data.get("refresh_token") or ""
+    twitch_access = token_data.get("access_token") or ""
+    twitch_refresh = token_data.get("refresh_token") or ""
 
-    user_info = await twitch_oauth.get_user_info(access_token)
+    user_info = await twitch_oauth.get_user_info(twitch_access)
     if not user_info:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Failed to get user info from Twitch",
         )
 
-    user.twitch_id = user_info["id"]
-    user.twitch_username = user_info["display_name"]
-    user.twitch_access_token = access_token
-    user.twitch_refresh_token = refresh_token
-    await db.commit()
+    twitch_id: str = user_info["id"]
+    display_name: str = user_info["display_name"]
 
+    # Look up existing user by Twitch ID
+    result = await db.execute(select(User).where(User.twitch_id == twitch_id))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        # First-time login — create the account using the Twitch display name as username.
+        # If the username is already taken, append the Twitch ID to ensure uniqueness.
+        username = display_name
+        existing = await db.execute(select(User).where(User.username == username))
+        if existing.scalar_one_or_none():
+            username = f"{display_name}_{twitch_id}"
+
+        user = User(
+            username=username,
+            role=UserRole.USER,
+            twitch_id=twitch_id,
+            twitch_username=display_name,
+            twitch_access_token=twitch_access,
+            twitch_refresh_token=twitch_refresh,
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+    else:
+        # Returning user — refresh Twitch tokens and display name
+        user.twitch_username = display_name
+        user.twitch_access_token = twitch_access
+        user.twitch_refresh_token = twitch_refresh
+        await db.commit()
+
+    jwt = create_access_token(data={"sub": str(user.id)})
     frontend_url = get_settings().frontend_url
-    params = urlencode({"twitch_linked": "true", "username": user_info["display_name"]})
+    params = urlencode({"token": jwt})
 
     return RedirectResponse(url=f"{frontend_url}?{params}", status_code=302)
-
-
-@router.post("/twitch/link")
-async def link_twitch_account(
-    request: TwitchLinkRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Link Twitch account to existing user (user must be logged in)"""
-    token_data = await twitch_oauth.exchange_code_for_token(request.code)
-    if not token_data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to exchange code for token",
-        )
-
-    access_token = token_data.get("access_token") or ""
-    refresh_token = token_data.get("refresh_token") or ""
-
-    user_info = await twitch_oauth.get_user_info(access_token)
-    if not user_info:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to get user info from Twitch",
-        )
-
-    current_user.twitch_id = user_info["id"]
-    current_user.twitch_username = user_info["display_name"]
-    current_user.twitch_access_token = access_token
-    current_user.twitch_refresh_token = refresh_token
-    await db.commit()
-    await db.refresh(current_user)
-
-    return {
-        "status": "linked",
-        "twitch_id": user_info["id"],
-        "twitch_username": user_info["display_name"],
-    }
-
-
-@router.delete("/twitch/unlink")
-async def unlink_twitch_account(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Unlink Twitch account from user"""
-    current_user.twitch_id = None
-    current_user.twitch_username = None
-    current_user.twitch_access_token = None
-    current_user.twitch_refresh_token = None
-
-    await db.execute(
-        select(UserStreamer).where(UserStreamer.user_id == current_user.id)
-    )
-    await db.commit()
-
-    return {"status": "unlinked"}

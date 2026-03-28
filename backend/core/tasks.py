@@ -135,17 +135,20 @@ async def job_calculate_top_10() -> None:
                         )
                         changed = True
 
-                # Find clips that changed position
+                # Find clips that changed position OR score (e.g. liked at rank #1)
                 for new_clip in new_top_10:
                     for cached_clip in cached_top_10:
                         if new_clip["clip_id"] == cached_clip["clip_id"]:
-                            if new_clip["rank"] != cached_clip["rank"]:
+                            rank_changed = new_clip["rank"] != cached_clip["rank"]
+                            score_changed = new_clip["score"] != cached_clip.get("score")
+                            if rank_changed or score_changed:
                                 changes["position_changes"].append(
                                     {
                                         "clip_id": new_clip["clip_id"],
                                         "old_rank": cached_clip["rank"],
                                         "new_rank": new_clip["rank"],
                                         "score": new_clip["score"],
+                                        "likes": new_clip["likes"],
                                     }
                                 )
                                 changed = True

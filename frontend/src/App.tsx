@@ -87,21 +87,23 @@ export default function App() {
   const [activeCommentClip, setActiveCommentClip] = useState<{ id: string; title: string } | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
 
-  // Restore session from stored JWT
+  // Restore session from stored JWT and handle Twitch OAuth callback (?token=)
   useEffect(() => {
-    const token = localStorage.getItem('token');
+    const params = new URLSearchParams(window.location.search);
+    const callbackToken = params.get('token');
+
+    if (callbackToken) {
+      // Fresh token from Twitch OAuth redirect — store and clean URL
+      localStorage.setItem('token', callbackToken);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+
+    const token = callbackToken || localStorage.getItem('token');
     if (token) {
       api
         .getMe()
         .then(setUser)
         .catch(() => localStorage.removeItem('token'));
-    }
-
-    // Handle Twitch OAuth redirect (?twitch_linked=true)
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('twitch_linked') === 'true') {
-      window.history.replaceState({}, '', window.location.pathname);
-      api.getMe().then(setUser).catch(() => {});
     }
   }, []);
 
@@ -110,8 +112,6 @@ export default function App() {
     document.title =
       user && (user.role === 'PRO' || user.role === 'ADMIN') ? 'Clipder Pro' : 'Clipder';
   }, [user]);
-
-  const handleLogin = (_token: string, userData: User) => setUser(userData);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -150,7 +150,6 @@ export default function App() {
       <AuthModal
         isOpen={showAuthModal}
         onClose={() => setShowAuthModal(false)}
-        onLogin={handleLogin}
       />
 
       <CommentsPanel

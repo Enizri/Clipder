@@ -1,5 +1,5 @@
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict
 
 
 class ClipBase(BaseModel):
@@ -30,15 +30,6 @@ class VideoUrlResponse(BaseModel):
     video_url: Optional[str] = None
     title: Optional[str] = None
     error: Optional[str] = None
-
-
-class ClipActionRequest(BaseModel):
-    action: str = Field(..., pattern="^(like|dislike)$")
-
-
-class ClipActionResponse(BaseModel):
-    status: str
-    current_score: int
 
 
 class Comment(BaseModel):

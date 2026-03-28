@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select, desc
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.database import get_db
@@ -86,7 +86,8 @@ async def get_current_leaderboard(
                 (Clip.month_key == current_month)
                 & (Clip.monthly_likes > 0)
             )
-            .order_by(desc(Clip.monthly_likes))
+            # Order by net score (likes - dislikes) to match tasks.py job
+            .order_by((Clip.monthly_likes - Clip.monthly_dislikes).desc())
             .limit(10)
         )
         clips = result.scalars().all()
@@ -105,7 +106,7 @@ async def get_current_leaderboard(
         }
 
     # ==================================================================
-    # STEP 3: Format response (dislikes only for backend, not exposed to user)
+    # STEP 3: Format response — score = net (likes - dislikes)
     # ==================================================================
     formatted_clips = [
         {
@@ -114,7 +115,7 @@ async def get_current_leaderboard(
             "title": clip.title,
             "creator": clip.creator_name,
             "likes": clip.monthly_likes,
-            "score": clip.monthly_likes,
+            "score": clip.monthly_likes - clip.monthly_dislikes,
             "thumbnail_url": clip.thumbnail_url,
         }
         for idx, clip in enumerate(clips)

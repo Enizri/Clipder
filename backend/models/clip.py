@@ -15,7 +15,7 @@ class Clip(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     twitch_clip_id: Mapped[str] = mapped_column(
-        String(50), unique=True, index=True, nullable=False
+        String(255), unique=True, index=True, nullable=False
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     url: Mapped[str] = mapped_column(String(500), nullable=False)

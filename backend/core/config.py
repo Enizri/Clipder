@@ -37,7 +37,10 @@ class Settings(BaseSettings):
     # Twitch OAuth
     twitch_client_id: str = ""
     twitch_client_secret: str = ""
-    twitch_redirect_uri: str = "http://localhost:8000/api/v1/auth/twitch/callback"
+    # Redirect URI must match what is registered in the Twitch Developer Console.
+    # In local dev, use the Vite frontend port (3000) so the callback is proxied
+    # through to the backend — avoids navigating directly to the backend port.
+    twitch_redirect_uri: str = "http://localhost:3000/api/v1/auth/twitch/callback"
 
     # Twitch content (comma-separated strings; parsed into lists by properties)
     twitch_channels: str = ""

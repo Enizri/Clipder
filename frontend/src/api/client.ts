@@ -1,7 +1,7 @@
 import type {
   ClipsResponse,
   VideoUrlResponse,
-  ClipActionResponse,
+  VoteResponse,
   Comment,
   LeaderboardEntry,
   AdminClip,
@@ -38,7 +38,6 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
     '/ai',
     '/ai-editor',
     '/auth/me',
-    '/auth/twitch',
   ].some((p) => fullUrl.includes(p));
   if (token && requiresAuth) {
     headers['Authorization'] = `Bearer ${token}`;
@@ -63,35 +62,14 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   // ===========================================================================
-  // AUTH
+  // AUTH — Twitch only
   // ===========================================================================
-
-  login: (email: string, password: string): Promise<{ access_token: string; user: User }> =>
-    fetchJson('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-
-  register: (
-    username: string,
-    email: string,
-    password: string
-  ): Promise<{ access_token: string; user: User }> =>
-    fetchJson('/auth/register', {
-      method: 'POST',
-      body: JSON.stringify({ username, email, password }),
-    }),
 
   getMe: (): Promise<User> => fetchJson('/auth/me'),
 
-  // ===========================================================================
-  // TWITCH OAUTH
-  // ===========================================================================
-
+  /** Returns Twitch OAuth URL — no token required. */
   getTwitchLoginUrl: (): Promise<{ authorization_url: string }> =>
     fetchJson('/auth/twitch/login'),
-
-  linkTwitch: (code: string): Promise<User> =>
-    fetchJson('/auth/twitch/link', { method: 'POST', body: JSON.stringify({ code }) }),
-
-  unlinkTwitch: (): Promise<void> => fetchJson('/auth/twitch/unlink', { method: 'DELETE' }),
 
   // ===========================================================================
   // FOLLOWING
@@ -126,30 +104,17 @@ export const api = {
     fetchJson<VideoUrlResponse>(`/clip/${clipId}/video-url`),
 
   // ===========================================================================
-  // VOTES (authenticated)
+  // VOTES (authenticated users only)
   // ===========================================================================
 
-  likeClip: (clipId: string): Promise<ClipActionResponse> =>
-    fetchJson<ClipActionResponse>(`/votes/clip/${clipId}/vote?vote_type=like`, { method: 'POST' }),
+  likeClip: (clipId: string): Promise<VoteResponse> =>
+    fetchJson<VoteResponse>(`/votes/clip/${clipId}/vote?vote_type=like`, { method: 'POST' }),
 
-  dislikeClip: (clipId: string): Promise<ClipActionResponse> =>
-    fetchJson<ClipActionResponse>(`/votes/clip/${clipId}/vote?vote_type=dislike`, { method: 'POST' }),
+  dislikeClip: (clipId: string): Promise<VoteResponse> =>
+    fetchJson<VoteResponse>(`/votes/clip/${clipId}/vote?vote_type=dislike`, { method: 'POST' }),
 
   getClipVotes: (clipId: string): Promise<{ likes: number; dislikes: number }> =>
     fetchJson(`/votes/clip/${clipId}/votes`),
-
-  // Unauthenticated fallbacks used when no user is logged in
-  legacyLikeClip: (clipId: string): Promise<ClipActionResponse> =>
-    fetchJson<ClipActionResponse>(`/clip/${clipId}/action`, {
-      method: 'POST',
-      body: JSON.stringify({ action: 'like' }),
-    }),
-
-  legacyDislikeClip: (clipId: string): Promise<ClipActionResponse> =>
-    fetchJson<ClipActionResponse>(`/clip/${clipId}/action`, {
-      method: 'POST',
-      body: JSON.stringify({ action: 'dislike' }),
-    }),
 
   // ===========================================================================
   // COMMENTS

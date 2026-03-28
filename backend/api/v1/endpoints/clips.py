@@ -1,10 +1,15 @@
-from typing import List, Dict, Any
+import asyncio
+import logging
+from datetime import datetime, timezone
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 import httpx
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+
+_clips_logger = logging.getLogger(__name__)
 
 from backend.core.state import AppState, get_state
 from backend.core.database import get_db
@@ -13,8 +18,6 @@ from backend.schemas.clip import (
     ClipResponse,
     ClipsResponse,
     VideoUrlResponse,
-    ClipActionRequest,
-    ClipActionResponse,
     Comment,
     CommentResponse,
     CategoryResponse,
@@ -324,19 +327,120 @@ TWITCH_GLOBAL_EMOTES = [
 ]
 
 
+def _yt_dlp_extract_sync(url: str) -> Optional[str]:
+    """Run yt-dlp synchronously — must be called via run_in_executor, never directly in async code."""
+    try:
+        import yt_dlp
+
+        ydl_opts: Dict[str, Any] = {
+            "format": "best[ext=mp4]/best",
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 10,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            video_url = info.get("url") if info else None
+            if not video_url and info:
+                for entry in (info.get("entries") or []):
+                    if entry and "url" in entry:
+                        return entry["url"]
+            return video_url
+    except Exception as e:
+        _clips_logger.warning("yt-dlp extraction failed for %s: %s", url, e)
+        return None
+
+
+def _db_clip_to_response(clip: Clip) -> ClipResponse:
+    """Convert a DB Clip row to a ClipResponse without needing AppState."""
+    return ClipResponse(
+        id=clip.twitch_clip_id,
+        title=clip.title,
+        url=clip.url,
+        thumbnail_url=clip.thumbnail_url or "",
+        view_count=clip.view_count,
+        creator_name=clip.creator_name,
+        # duration and channel are not stored in DB; provide safe defaults
+        duration=0.0,
+        created_at=clip.created_at.isoformat() if clip.created_at else "",
+        channel=clip.creator_name,
+        local_likes=clip.monthly_likes,
+        comment_count=0,
+    )
+
+
+async def _background_refresh(category: str) -> None:
+    """Fetch fresh clips from Twitch in the background so the next request is fast."""
+    try:
+        state = await asyncio.wait_for(AppState.get_instance(), timeout=60.0)
+        await state.fetch_clips(category)
+    except Exception as exc:
+        _clips_logger.debug("Background Twitch refresh failed: %s", exc)
+
+
 @router.get("/clips", response_model=ClipsResponse)
 async def get_clips(
     category: str = "My Streamers",
-    state: AppState = Depends(get_state),
     db: AsyncSession = Depends(get_db),
 ) -> ClipsResponse:
-    clips = await state.fetch_clips(category)
-    # Best-effort persist so other endpoints can resolve these clips by slug.
+    """
+    Serve clips with a DB-first strategy so the endpoint is never blocked by Twitch API latency.
+
+    Priority order:
+    1. AppState in-memory cache — zero latency when warm (subsequent requests)
+    2. DB rows — fast async query; covers the cold-start window
+    3. Block on Twitch API — only when DB is truly empty (first ever run)
+    """
+    # --- Fast path: AppState already has a warm cache for this category ---
+    if AppState._instance is not None:
+        queue = AppState._instance.category_queues.get(category)
+        if queue:
+            state = AppState._instance
+            for clip in queue:
+                clip["local_likes"] = state.clip_scores.get(clip["id"], 0)
+                clip["comment_count"] = len(state.clip_comments.get(clip["id"], []))
+            return ClipsResponse(
+                clips=[ClipResponse.model_validate(c) for c in queue],
+                total=len(queue),
+            )
+
+    # --- DB fallback: serve stored clips while Twitch warms up in background ---
+    current_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    result = await db.execute(
+        select(Clip)
+        .where(Clip.month_key == current_month)
+        .order_by(Clip.view_count.desc())
+        .limit(30)
+    )
+    db_clips = result.scalars().all()
+
+    if not db_clips:
+        # Try any month — covers a server that just had its DB seeded with older data
+        result = await db.execute(
+            select(Clip).order_by(Clip.view_count.desc()).limit(30)
+        )
+        db_clips = result.scalars().all()
+
+    if db_clips:
+        # Kick off a Twitch refresh in background so the next request hits the fast path
+        asyncio.create_task(_background_refresh(category))
+        return ClipsResponse(
+            clips=[_db_clip_to_response(c) for c in db_clips],
+            total=len(db_clips),
+        )
+
+    # --- Last resort: DB is empty (first ever run) — wait for Twitch (bounded) ---
+    _clips_logger.info("DB empty — waiting for Twitch fetch for category '%s'", category)
     try:
-        await state._upsert_clips(db, clips)
-    except Exception:
-        pass
-    # fetch_clips returns dicts; ClipsResponse expects ClipResponse models.
+        state = await asyncio.wait_for(AppState.get_instance(), timeout=5.0)
+        clips = await asyncio.wait_for(state.fetch_clips(category), timeout=25.0)
+    except asyncio.TimeoutError:
+        _clips_logger.warning("Timed out waiting for initial Twitch fetch")
+        clips = []
+    except Exception as exc:
+        _clips_logger.warning("Initial Twitch fetch failed: %s", exc)
+        clips = []
+
     return ClipsResponse(
         clips=[ClipResponse.model_validate(c) for c in clips],
         total=len(clips),
@@ -430,117 +534,64 @@ async def get_clip_video_url(
     state: AppState = Depends(get_state),
     db: AsyncSession = Depends(get_db),
 ) -> VideoUrlResponse:
-    """Fast video URL endpoint with caching to avoid yt-dlp slowness."""
-    import logging
+    """
+    Return a playable video URL for a clip.
 
-    try:
-        clip_pk = int(clip_id)
-    except ValueError:
-        clip_pk = None
+    Resolution order:
+    1. DB clip + in-DB URL cache (fastest)
+    2. DB clip + yt-dlp extraction via thread-pool (non-blocking)
+    3. In-memory AppState cache (legacy fallback)
+    """
+    from backend.models.clip_video_cache import ClipVideoCache
 
+    # --- Resolve DB clip (PK int or Twitch slug) ---
     clip = None
-
-    # Strategy 1: Try numeric DB lookup
-    if clip_pk is not None:
-        clip = await db.get(Clip, clip_pk)
-
-    # Strategy 2: Try Twitch clip slug lookup if numeric failed
+    try:
+        clip = await db.get(Clip, int(clip_id))
+    except (ValueError, Exception):
+        pass
     if not clip:
         result = await db.execute(select(Clip).where(Clip.twitch_clip_id == clip_id))
         clip = result.scalar_one_or_none()
 
-    # If found in DB, check cache first
     if clip:
-        from backend.models.clip_video_cache import ClipVideoCache
-
-        # Try to get from cache
+        # Check DB cache first
         cache_result = await db.execute(
             select(ClipVideoCache).where(ClipVideoCache.clip_id == clip.id)
         )
         cached = cache_result.scalar_one_or_none()
-
         if cached:
-            logging.info(f"Video URL cache hit for clip {clip_id}")
-            # Return backend proxy URL instead of direct URL to bypass CORS
-            proxy_url = f"/api/v1/clip/{clip.id}/video-stream"
-            return VideoUrlResponse(
-                video_url=proxy_url, title=cached.title or clip.title
-            )
+            _clips_logger.debug("Video URL cache hit for clip %s", clip_id)
+            return VideoUrlResponse(video_url=cached.video_url, title=cached.title or clip.title)
 
-        # Cache miss - extract using yt-dlp (background task would pre-populate this)
-        logging.info(f"Video URL cache miss for clip {clip_id}, extracting...")
+        # Cache miss — run yt-dlp in a thread pool so the event loop stays free
+        _clips_logger.info("Video URL cache miss for clip %s, extracting...", clip_id)
+        loop = asyncio.get_event_loop()
+        video_url: Optional[str] = await loop.run_in_executor(
+            None, _yt_dlp_extract_sync, clip.url
+        )
+
+        # Fall back to the Twitch clip page URL if yt-dlp returned nothing
+        if not video_url:
+            video_url = clip.url
+
+        # Persist to cache (best-effort; don't fail the request if it errors)
         try:
-            import yt_dlp
+            new_cache = ClipVideoCache(clip_id=clip.id, video_url=video_url, title=clip.title)
+            db.add(new_cache)
+            await db.commit()
+        except Exception as cache_err:
+            await db.rollback()
+            _clips_logger.debug("Failed to cache video URL for clip %s: %s", clip_id, cache_err)
 
-            ydl_opts: Dict[str, Any] = {
-                "format": "best[ext=mp4]/best",
-                "quiet": True,
-                "no_warnings": True,
-                "socket_timeout": 5,  # 5 second timeout
-            }
+        return VideoUrlResponse(video_url=video_url, title=clip.title)
 
-            video_url = None
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(clip.url, download=False)
-                    video_url = info.get("url") if info else None
+    # Clip not in DB yet — try in-memory AppState (handles clips loaded this session)
+    legacy = await state.get_video_url(clip_id)
+    if "error" not in legacy:
+        return VideoUrlResponse(**legacy)
 
-                    if not video_url and info:
-                        entries = info.get("entries")
-                        if entries:
-                            for entry in entries:
-                                if entry and "url" in entry:
-                                    video_url = entry["url"]
-                                    break
-            except Exception as ydl_error:
-                logging.warning(f"yt-dlp extraction failed for {clip.url}: {ydl_error}")
-                # Fallback to direct URL
-                video_url = clip.url
-
-            if video_url:
-                # Cache it for next time
-                try:
-                    new_cache = ClipVideoCache(
-                        clip_id=clip.id, video_url=video_url, title=clip.title
-                    )
-                    db.add(new_cache)
-                    await db.commit()
-                except Exception as cache_err:
-                    logging.debug(f"Failed to cache video URL: {cache_err}")
-                    # Don't fail the request if caching fails
-                    pass
-
-                # Return backend proxy URL instead of direct URL to bypass CORS
-                proxy_url = f"/api/v1/clip/{clip.id}/video-stream"
-                return VideoUrlResponse(video_url=proxy_url, title=clip.title)
-
-            raise HTTPException(status_code=404, detail="No video URL found for clip")
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            logging.error(f"Error processing clip {clip_id}: {e}")
-            raise HTTPException(status_code=500, detail="Failed to process clip")
-
-    # Strategy 3: Fall back to legacy AppState cache/metadata store
-    result = await state.get_video_url(clip_id)
-    if "error" not in result:
-        return VideoUrlResponse(**result)
-
-    # All strategies exhausted
-    raise HTTPException(
-        status_code=404, detail="Could not resolve video URL for this clip"
-    )
-
-
-@router.post("/clip/{clip_id}/action", response_model=ClipActionResponse)
-async def clip_action(
-    clip_id: str,
-    action_data: ClipActionRequest,
-    state: AppState = Depends(get_state),
-) -> ClipActionResponse:
-    result = await state.action_clip(clip_id, action_data.action)
-    return ClipActionResponse(**result)
+    raise HTTPException(status_code=404, detail="Could not resolve video URL for this clip")
 
 
 @router.get("/clip/{clip_id}/comments", response_model=List[Comment])

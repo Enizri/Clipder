@@ -1,5 +1,4 @@
 import React from 'react';
-import { api } from '../api/client';
 import type { User } from '../types';
 
 interface ProfilePageProps {
@@ -8,38 +7,15 @@ interface ProfilePageProps {
   onShowAuth: () => void;
 }
 
-export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onUserUpdate, onShowAuth }) => {
-  const handleLinkTwitch = async () => {
-    try {
-      const { authorization_url } = await api.getTwitchLoginUrl();
-      const popup = window.open(authorization_url, 'Twitch OAuth', 'width=600,height=700');
-
-      const handleMessage = (event: MessageEvent) => {
-        if (event.data?.type === 'twitch_linked') {
-          window.removeEventListener('message', handleMessage);
-          api.getMe().then(onUserUpdate).catch(() => {});
-          popup?.close();
-        }
-      };
-      window.addEventListener('message', handleMessage);
-    } catch (err) {
-      console.error('Failed to start Twitch OAuth:', err);
-    }
-  };
-
-  const handleUnlinkTwitch = async () => {
-    try {
-      await api.unlinkTwitch();
-      window.location.reload();
-    } catch (err) {
-      console.error('Failed to unlink Twitch:', err);
-    }
+export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onShowAuth }) => {
+  const handleLoginWithTwitch = async () => {
+    onShowAuth();
   };
 
   return (
     <div id="profile" className="view-section active">
       <div className="list-container">
-        <h2 className="section-title">👤 Profile</h2>
+        <h2 className="section-title">Profile</h2>
 
         {user ? (
           <div className="profile-content">
@@ -47,44 +23,43 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onUserUpdate, on
               <div className="profile-avatar">{user.username.charAt(0).toUpperCase()}</div>
               <div className="profile-info">
                 <h3>{user.username}</h3>
-                <p>{user.email}</p>
                 <span className="role-badge">{user.role}</span>
+                {user.is_pro && <span className="pro-badge"><span className="pro-badge-text">PRO</span></span>}
               </div>
             </div>
 
             <div className="twitch-section">
-              <h4>📺 Twitch Account</h4>
+              <h4>Twitch Account</h4>
+              {/* Every user is Twitch-linked by definition in Twitch-only auth */}
               {user.twitch_username ? (
                 <div className="twitch-connected">
                   <span>
                     Connected as: <strong>@{user.twitch_username}</strong>
                   </span>
-                  <button className="btn-small btn-outline" onClick={handleUnlinkTwitch}>
-                    Unlink
-                  </button>
                 </div>
               ) : (
-                <button className="btn-small btn-primary" onClick={handleLinkTwitch}>
-                  Connect Twitch Account
-                </button>
+                <p className="hint-text">No Twitch account linked (unexpected — please re-login).</p>
               )}
             </div>
 
             <div className="following-section">
-              <h4>⭐ My Streamers</h4>
+              <h4>My Streamers</h4>
               <p className="section-subtitle">
                 Streamers you want to see in your swipe feed
               </p>
               <p className="hint-text">
-                Connect your Twitch account above to sync your follows automatically!
+                Sync your Twitch follows to personalise your feed.
               </p>
             </div>
           </div>
         ) : (
           <div className="auth-prompt">
-            <p>Please login to access your profile</p>
-            <button className="btn-primary" onClick={onShowAuth}>
-              Login
+            <p>Login with Twitch to access your profile</p>
+            <button className="twitch-login-btn" style={{ maxWidth: 260, margin: '16px auto 0' }} onClick={handleLoginWithTwitch}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z" />
+              </svg>
+              Login with Twitch
             </button>
           </div>
         )}
