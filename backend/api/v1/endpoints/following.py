@@ -2,14 +2,14 @@ from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select
 
 from backend.core.database import get_db
 from backend.core.twitch_oauth import TwitchOAuth
 from backend.models import User, UserStreamer
 from backend.api.v1.deps import get_current_user
 
-router = APIRouter(prefix="/api/following", tags=["following"])
+router = APIRouter(prefix="/api/v1/following", tags=["following"])
 
 twitch_oauth = TwitchOAuth()
 
@@ -119,7 +119,7 @@ async def get_twitch_follows(
             detail="Twitch account not linked",
         )
 
-    follows = twitch_oauth.get_user_follows(
+    follows = await twitch_oauth.get_user_follows(
         current_user.twitch_access_token,
         current_user.twitch_id,
     )
@@ -138,7 +138,7 @@ async def search_channels(
             detail="Twitch account not linked",
         )
 
-    channels = twitch_oauth.search_channels(q, current_user.twitch_access_token)
+    channels = await twitch_oauth.search_channels(q, current_user.twitch_access_token)
     return [SearchChannelResponse(**c) for c in channels]
 
 
@@ -157,7 +157,7 @@ async def sync_with_twitch(
             detail="Twitch account not linked",
         )
 
-    follows = twitch_oauth.get_user_follows(
+    follows = await twitch_oauth.get_user_follows(
         current_user.twitch_access_token,
         current_user.twitch_id,
     )

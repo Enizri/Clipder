@@ -6,7 +6,7 @@ Verifies database connectivity, WebSocket status, and background job health.
 from datetime import datetime, timezone
 from typing import Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,9 +40,9 @@ async def health_check(
     except Exception as e:
         db_status = f"error: {str(e)}"
 
-    # Check cache status
+    # Check cache status - calling it just to confirm it doesn't throw
     try:
-        cache = get_cache_provider()
+        get_cache_provider()
         cache_status = "connected"
     except Exception as e:
         cache_status = f"error: {str(e)}"
@@ -111,7 +111,7 @@ async def health_check_cache() -> Dict[str, Any]:
     Cache health check - cache provider status.
     """
     try:
-        cache = get_cache_provider()
+        get_cache_provider()
         status = "ok"
         error = None
     except Exception as e:

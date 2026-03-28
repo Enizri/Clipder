@@ -1,10 +1,8 @@
-from datetime import datetime, timezone
-from typing import Dict, Any
 import logging
+from typing import Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 
 from backend.core.database import get_db
@@ -14,11 +12,6 @@ from backend.core.tasks import job_calculate_top_10
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/votes", tags=["votes"])
-
-
-def get_month_key() -> str:
-    """Get current month in YYYY-MM format."""
-    return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
 @router.post("/like/{clip_id}")

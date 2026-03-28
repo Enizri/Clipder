@@ -5,7 +5,6 @@ from backend.models.vote import Vote, VoteType
 from backend.models.user_streamer import UserStreamer
 from backend.models.user_clip_history import UserClipHistory
 from backend.models.leaderboard_snapshot import LeaderboardSnapshot
-from backend.models.leaderboard_clip_performance import LeaderboardClipPerformance
 from backend.models.leaderboard_monthly_summary import LeaderboardMonthlySummary
 from backend.models.clip_video_cache import ClipVideoCache
 
@@ -19,7 +18,6 @@ __all__ = [
     "UserStreamer",
     "UserClipHistory",
     "LeaderboardSnapshot",
-    "LeaderboardClipPerformance",
     "LeaderboardMonthlySummary",
     "ClipVideoCache",
 ]

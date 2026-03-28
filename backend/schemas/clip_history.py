@@ -52,7 +52,7 @@ class ClipHistoryResponse(BaseModel):
     chat_messages: Optional[str] = None  # Stored as JSON string
     edit_history: Optional[str] = None  # Stored as JSON string
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
     last_edited_at: Optional[datetime] = None
 
 

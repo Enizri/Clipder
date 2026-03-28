@@ -1,16 +1,15 @@
-import sys
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
+from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
 
 from backend.api.v1.endpoints import clips, leaderboard, admin, votes, health
 from backend.api.v1.endpoints import auth, following, ai_chat, ai_editor
+from backend.core.config import get_settings
 from backend.core.database import init_database, shutdown_database
+from backend.core.security import decode_token
 from backend.core.state import ConnectionManager
 from backend.core.tasks import start_scheduler, stop_scheduler
 from backend.core import logger as core_logger
@@ -20,22 +19,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-
-# ==============================================================================
-# CORS GUARANTEE MIDDLEWARE - Ensures CORS headers even on error responses
-# ==============================================================================
-class CORSGuaranteeMiddleware(BaseHTTPMiddleware):
-    """Ensure CORS headers are present on ALL responses, including errors."""
-    
-    async def dispatch(self, request: Request, call_next) -> Response:
-        response = await call_next(request)
-        # Add CORS headers to every response
-        response.headers["access-control-allow-origin"] = "*"
-        response.headers["access-control-allow-methods"] = "*"
-        response.headers["access-control-allow-headers"] = "*"
-        response.headers["access-control-expose-headers"] = "*"
-        return response
+settings = get_settings()
 
 
 @asynccontextmanager
@@ -80,19 +64,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CRITICAL: Add CORS middleware FIRST, before any routes
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
-    allow_credentials=False,  # Don't require credentials for CORS
-    allow_methods=["*"],  # Allow all methods
-    allow_headers=["*"],  # Allow all headers
-    expose_headers=["*"],  # Expose all response headers
-    max_age=3600,  # Cache preflight for 1 hour
+    allow_origins=[settings.frontend_url],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    max_age=3600,
 )
-
-# Add secondary middleware to guarantee CORS headers on ALL responses
-app.add_middleware(CORSGuaranteeMiddleware)
 
 
 # Now add routes AFTER middleware
@@ -108,7 +87,18 @@ app.include_router(health.router)
 
 
 @app.websocket("/ws/leaderboard")
-async def websocket_leaderboard(websocket: WebSocket):
+async def websocket_leaderboard(
+    websocket: WebSocket,
+    token: Optional[str] = Query(default=None),
+):
+    """Real-time leaderboard updates. Accepts an optional JWT token for future
+    authenticated-only features; connection is allowed without one."""
+    if token is not None:
+        payload = decode_token(token)
+        if payload is None:
+            await websocket.close(code=1008, reason="Invalid or expired token")
+            return
+
     ws_manager = ConnectionManager.get_instance()
     try:
         logger.info(f"WebSocket connect attempt from {websocket.client}")

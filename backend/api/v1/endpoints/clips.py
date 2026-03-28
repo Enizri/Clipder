@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 import httpx
@@ -11,7 +11,6 @@ from backend.core.database import get_db
 from backend.models import Clip
 from backend.schemas.clip import (
     ClipsResponse,
-    ClipResponse,
     VideoUrlResponse,
     ClipActionRequest,
     ClipActionResponse,
@@ -19,10 +18,9 @@ from backend.schemas.clip import (
     CommentResponse,
     CategoryResponse,
     EmoteResponse,
-    GifResponse,
 )
 
-router = APIRouter(prefix="/api", tags=["clips"])
+router = APIRouter(prefix="/api/v1", tags=["clips"])
 
 # think of moving these to somewhere else
 BTTV_GLOBAL_EMOTES = [
@@ -459,7 +457,7 @@ async def get_clip_video_url(
         if cached:
             logging.info(f"Video URL cache hit for clip {clip_id}")
             # Return backend proxy URL instead of direct URL to bypass CORS
-            proxy_url = f"/api/clip/{clip.id}/video-stream"
+            proxy_url = f"/api/v1/clip/{clip.id}/video-stream"
             return VideoUrlResponse(
                 video_url=proxy_url, title=cached.title or clip.title
             )
@@ -508,7 +506,7 @@ async def get_clip_video_url(
                     pass
 
                 # Return backend proxy URL instead of direct URL to bypass CORS
-                proxy_url = f"/api/clip/{clip.id}/video-stream"
+                proxy_url = f"/api/v1/clip/{clip.id}/video-stream"
                 return VideoUrlResponse(video_url=proxy_url, title=clip.title)
 
             raise HTTPException(status_code=404, detail="No video URL found for clip")
@@ -572,12 +570,6 @@ async def post_comment(
 
 @router.get("/emotes", response_model=EmoteResponse)
 async def get_emotes(channel: str = Query(default="")) -> EmoteResponse:
-    emotes = {
-        "twitch": TWITCH_GLOBAL_EMOTES,
-        "bttv": BTTV_GLOBAL_EMOTES,
-        "7tv": SEVENTV_EMOTES,
-    }
-
     channel_emotes: List[Dict[str, str]] = []
     if channel:
         try:
@@ -624,46 +616,3 @@ async def get_emotes(channel: str = Query(default="")) -> EmoteResponse:
     )
 
 
-@router.get("/gifs", response_model=GifResponse)
-async def search_gifs(
-    q: str = Query(default="", min_length=1), limit: int = Query(default=20, le=50)
-) -> GifResponse:
-    gifs: List[Dict[str, Any]] = []
-
-    if q:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    "https://api.giphy.com/v1/gifs/search",
-                    params={
-                        "api_key": "dc6zaTOxFJmzC",
-                        "q": q,
-                        "limit": limit,
-                        "rating": "pg-13",
-                    },
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    for gif in data.get("data", []):
-                        gifs.append(
-                            {
-                                "id": gif.get("id", ""),
-                                "title": gif.get("title", ""),
-                                "url": gif.get("images", {})
-                                .get("original", {})
-                                .get("url", ""),
-                                "preview": gif.get("images", {})
-                                .get("fixed_height_small", {})
-                                .get("url", ""),
-                                "width": gif.get("images", {})
-                                .get("original", {})
-                                .get("width", ""),
-                                "height": gif.get("images", {})
-                                .get("original", {})
-                                .get("height", ""),
-                            }
-                        )
-        except Exception:
-            pass
-
-    return GifResponse(gifs=gifs)

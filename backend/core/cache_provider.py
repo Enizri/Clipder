@@ -5,7 +5,6 @@ This module defines an abstract interface for leaderboard caching, allowing
 easy swapping between in-memory (DictLeaderboardCache) and Redis implementations.
 """
 
-import json
 import logging
 from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Any

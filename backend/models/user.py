@@ -1,10 +1,9 @@
+import enum
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import String, Integer, DateTime, Enum as SQLEnum
+from sqlalchemy import String, Integer, DateTime, Enum as SQLEnum, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-import enum
 
 from backend.core.database import Base
 
@@ -33,18 +32,13 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(
         SQLEnum(UserRole), default=UserRole.USER, nullable=False
     )
-    twitch_id: Mapped[Optional[str]] = mapped_column(
-        String(50), nullable=True, unique=True
-    )
+    twitch_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, unique=True)
     twitch_username: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    twitch_access_token: Mapped[Optional[str]] = mapped_column(
-        String(500), nullable=True
-    )
-    twitch_refresh_token: Mapped[Optional[str]] = mapped_column(
-        String(500), nullable=True
-    )
+    twitch_access_token: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    twitch_refresh_token: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     # Lazy-load relationships (only load when explicitly accessed)
@@ -52,8 +46,5 @@ class User(Base):
         "Vote", back_populates="user", cascade="all, delete-orphan", lazy="select"
     )
     streamers: Mapped[list["UserStreamer"]] = relationship(
-        "UserStreamer",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="select",
+        "UserStreamer", back_populates="user", cascade="all, delete-orphan", lazy="select"
     )

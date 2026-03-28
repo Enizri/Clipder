@@ -8,11 +8,10 @@ Three main jobs:
 """
 
 import logging
-from datetime import datetime, timedelta, time, timezone
-from typing import Dict, List, Any
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from sqlalchemy import select, func, text
-from sqlalchemy.ext.asyncio import AsyncSession
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
@@ -23,14 +22,13 @@ from backend.core import database
 from backend.models import (
     Clip,
     LeaderboardSnapshot,
-    LeaderboardClipPerformance,
     LeaderboardMonthlySummary,
 )
 
 logger = logging.getLogger(__name__)
 
 # Global scheduler instance
-_scheduler: AsyncIOScheduler | None = None
+_scheduler: Optional[AsyncIOScheduler] = None
 
 
 def get_scheduler() -> AsyncIOScheduler:
@@ -77,7 +75,7 @@ async def job_calculate_top_10() -> None:
                         (Clip.month_key == current_month)
                         & (Clip.monthly_likes > 0)
                     )
-                    .order_by(Clip.monthly_likes.desc())
+                    .order_by((Clip.monthly_likes - Clip.monthly_dislikes).desc())
                     .limit(10)
                 )
                 clips = result.scalars().all()
@@ -99,7 +97,7 @@ async def job_calculate_top_10() -> None:
                     "title": clip.title,
                     "creator": clip.creator_name,
                     "likes": clip.monthly_likes,
-                    "score": clip.monthly_likes,
+                    "score": clip.monthly_likes - clip.monthly_dislikes,
                     "thumbnail_url": clip.thumbnail_url,
                 }
                 for idx, clip in enumerate(clips)
@@ -293,30 +291,37 @@ async def job_finalize_month_end() -> None:
 
             # Calculate statistics
             try:
-                all_clips_result = await db.execute(
-                    select(func.count(Clip.id)).where(Clip.month_key == previous_month)
-                )
-                total_clips = all_clips_result.scalar() or 0
+                from backend.models import Vote
 
-                # Count total votes for the month
                 total_votes_result = await db.execute(
                     select(func.sum(Clip.monthly_likes + Clip.monthly_dislikes)).where(
                         Clip.month_key == previous_month
                     )
                 )
                 total_votes = total_votes_result.scalar() or 0
+
+                # Count distinct users who voted on clips in the previous month
+                unique_voters_result = await db.execute(
+                    select(func.count(func.distinct(Vote.user_id))).where(
+                        Vote.clip_id.in_(
+                            select(Clip.id).where(Clip.month_key == previous_month)
+                        )
+                    )
+                )
+                total_unique_voters = unique_voters_result.scalar() or 0
             except Exception as stats_error:
                 logger.warning(
                     f"Could not calculate statistics: {str(stats_error)[:100]}"
                 )
-                total_clips = 0
                 total_votes = 0
+                total_unique_voters = 0
 
             # Insert monthly summary
             summary = LeaderboardMonthlySummary(
                 snapshot_month=previous_month,
                 final_ranking=final_ranking,
                 total_votes=int(total_votes),
+                total_unique_voters=int(total_unique_voters),
                 top_clip_id=top_clips[0].id,
                 top_clip_score=top_clips[0].monthly_likes
                 - top_clips[0].monthly_dislikes,

@@ -1,8 +1,9 @@
 import uuid
-import json
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, ForeignKey, Integer, Text
-from sqlalchemy.orm import relationship
+from typing import Optional
+
+from sqlalchemy import Integer, String, Text, DateTime, ForeignKey, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.core.database import Base
 
@@ -12,33 +13,36 @@ class UserClipHistory(Base):
 
     __tablename__ = "user_clip_history"
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    clip_id = Column(String, nullable=False, index=True)
-    clip_title = Column(String, nullable=False)
-    clip_url = Column(String, nullable=False)
-    clip_channel = Column(String, nullable=False)
-    thumbnail_url = Column(String, nullable=True)
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=False, index=True
+    )
+    clip_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    clip_title: Mapped[str] = mapped_column(String, nullable=False)
+    clip_url: Mapped[str] = mapped_column(String, nullable=False)
+    clip_channel: Mapped[str] = mapped_column(String, nullable=False)
+    thumbnail_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
-    # Edits tracking (stored as JSON)
-    clip_description = Column(String, nullable=True)  # User's custom description
-    clip_tags = Column(Text, nullable=True)  # JSON array of tags
-    edited_title = Column(String, nullable=True)  # Original vs edited title
+    clip_description: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # JSON array of string tags
+    clip_tags: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    edited_title: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
-    # Chat history (stored as JSON array)
-    chat_messages = Column(
-        Text, nullable=True
-    )  # JSON array of {role, content, timestamp}
+    # JSON array of {role, content, timestamp}
+    chat_messages: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # JSON array of {action, timestamp, before, after}
+    edit_history: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Timeline of all edits (stored as JSON array)
-    edit_history = Column(
-        Text, nullable=True
-    )  # JSON array of {action, timestamp, before, after}
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True
+    )
+    last_edited_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
-    # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    last_edited_at = Column(DateTime, nullable=True)
-
-    # Relationship
-    user = relationship("User", backref="clip_history")
+    user: Mapped["User"] = relationship("User", backref="clip_history")  # type: ignore[name-defined]  # noqa: F821

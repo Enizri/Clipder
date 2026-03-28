@@ -1,8 +1,8 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Integer, DateTime, ForeignKey
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import String, Integer, DateTime, ForeignKey, func
+from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.core.database import Base
 
@@ -19,11 +19,9 @@ class ClipVideoCache(Base):
     video_url: Mapped[str] = mapped_column(String(1000), nullable=False)
     title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
-    # Metadata for cache invalidation if needed
     extracted_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-
-    # Add relationship back to clip if needed
-    # clip: Mapped["Clip"] = relationship("Clip", back_populates="video_cache")
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

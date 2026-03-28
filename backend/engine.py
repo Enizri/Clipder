@@ -75,7 +75,8 @@ class Config:
 
     @classmethod
     def from_env(cls) -> 'Config':
-        base_dir = Path(__file__).parent
+        # base_dir points to the project root (one level above this file's package)
+        base_dir = Path(__file__).parent.parent
         required = ["TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET", "GROQ_API_KEY"]
         missing = [v for v in required if not os.getenv(v)]
         if missing:

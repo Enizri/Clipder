@@ -64,3 +64,12 @@ async def check_pro_access(user: User = Depends(get_current_user)) -> User:
             status_code=status.HTTP_403_FORBIDDEN, detail="Pro subscription required"
         )
     return user
+
+
+async def check_admin(user: User = Depends(get_current_user)) -> User:
+    """Require ADMIN role. Use as a FastAPI dependency on admin endpoints."""
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
+        )
+    return user

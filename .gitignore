@@ -1,67 +1,78 @@
-# Dependencies
-node_modules/
-package-lock.json
-package-lock/
-
-# Build outputs
-dist/
-build/
-
+# ==============================================================================
 # Python
+# ==============================================================================
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
+*.egg-info/
+.ruff_cache/
+.python-version
+sessionsHist
+
+# Virtual environments
 .venv/
 venv/
 env/
-*.egg-info/
+
+# ==============================================================================
+# Node / Frontend
+# ==============================================================================
+node_modules/
+
+# Build outputs
 dist/
 build/
-.ruff_cache/
-sessionsHist
-# Python version
-.python-version
 
-# Environment
+# ==============================================================================
+# Environment & Secrets
+# ==============================================================================
 .env
 .env.local
 .env.*.local
+!.env.example
 
-# Logs
-*.log
-logs/
-clip_bot.log
-
-# Credentials & Tokens
+# ==============================================================================
+# Credentials & Tokens (never commit these)
+# ==============================================================================
 *.pickle
 token.pickle
 cookies*.txt
 credential*.json
 client_secrets.json
+tiktok.com_cookies.txt
 
-# Data files (keep .env.example)
-*.json
-!pyproject.toml
-!.env.example
+# ==============================================================================
+# Logs
+# ==============================================================================
+*.log
+logs/
+clip_bot.log
 
+# ==============================================================================
 # IDE
+# ==============================================================================
 .idea/
 .vscode/
 *.swp
 *.swo
 
+# ==============================================================================
 # OS
+# ==============================================================================
 .DS_Store
 Thumbs.db
-.start.bat
 
-# Temp files
+# ==============================================================================
+# Misc / Temp
+# ==============================================================================
 *.tmp
 *.temp
 nul
 ~*
+.start.bat
 
-
-tiktok.com_cookies.txt
+# Runtime directories (created by the clip processing engine)
+clips_to_process/
+processed_clips/

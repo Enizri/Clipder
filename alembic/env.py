@@ -13,7 +13,18 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 from backend.core.database import Base
-from backend.models import User, Clip, Vote, UserStreamer, UserClipHistory
+
+# Import every model so Alembic can detect all tables in metadata
+from backend.models import (  # noqa: F401
+    User,
+    Clip,
+    Vote,
+    UserStreamer,
+    UserClipHistory,
+    LeaderboardSnapshot,
+    LeaderboardMonthlySummary,
+    ClipVideoCache,
+)
 
 config = context.config
 
@@ -23,12 +34,19 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def get_url():
-    return os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/dbname")
+def get_url() -> str:
+    """Return DATABASE_URL from env; raise clearly if missing."""
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL environment variable is not set. "
+            "Set it in your .env file before running migrations."
+        )
+    return url
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode."""
+    """Run migrations in 'offline' mode (no live DB connection needed)."""
     url = get_url()
     context.configure(
         url=url,
@@ -49,17 +67,21 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """Run migrations in 'online' mode with async engine."""
-    configuration = config.get_section(config.config_ini_section)
-    configuration["sqlalchemy.url"] = get_url()
+    """Run migrations in 'online' mode with an async engine."""
+    url = get_url()
+    configuration = config.get_section(config.config_ini_section, {})
+    configuration["sqlalchemy.url"] = url
+
+    # Supabase pooler requires SSL + disabled statement caching
+    connect_args = (
+        {"ssl": "require", "statement_cache_size": 0} if "pooler" in url else {}
+    )
 
     connectable = async_engine_from_config(
         configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
-        connect_args={"ssl": "require", "statement_cache_size": 0}
-        if "pooler" in get_url()
-        else {},
+        connect_args=connect_args,
     )
 
     async with connectable.connect() as connection:
@@ -69,7 +91,7 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
+    """Entry point for online migration mode."""
     asyncio.run(run_async_migrations())
 
 

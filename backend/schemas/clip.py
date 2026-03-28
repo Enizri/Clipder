@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 from pydantic import BaseModel, Field, ConfigDict
 
 
@@ -69,14 +69,3 @@ class EmoteResponse(BaseModel):
     channel: List[Dict[str, str]] = []
 
 
-class GifItem(BaseModel):
-    id: str
-    title: str
-    url: str
-    preview: str
-    width: str
-    height: str
-
-
-class GifResponse(BaseModel):
-    gifs: List[Dict[str, Any]]

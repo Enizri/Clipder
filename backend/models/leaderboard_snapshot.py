@@ -1,7 +1,7 @@
 """Leaderboard snapshot model for real-time 5-second tracking."""
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Index, func, text
+from sqlalchemy import Integer, String, DateTime, Index, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 

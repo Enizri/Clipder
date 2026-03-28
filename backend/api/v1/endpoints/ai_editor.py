@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.v1.deps import get_current_user, get_db
+from backend.api.v1.deps import get_current_user
+from backend.core.database import get_db
 from backend.models import User, UserClipHistory
 from backend.schemas.clip_history import (
     ClipHistoryCreate,
@@ -44,10 +45,10 @@ async def save_clip_to_history(
         clip_description=request.clip_description,
         clip_tags=json.dumps(request.clip_tags) if request.clip_tags else None,
         edited_title=request.edited_title,
-        chat_messages=json.dumps([m.dict() for m in request.chat_messages])
+        chat_messages=json.dumps([m.model_dump() for m in request.chat_messages])
         if request.chat_messages
         else None,
-        edit_history=json.dumps([e.dict() for e in request.edit_history])
+        edit_history=json.dumps([e.model_dump() for e in request.edit_history])
         if request.edit_history
         else None,
         created_at=datetime.now(timezone.utc),
@@ -122,13 +123,35 @@ async def delete_clip_from_history(
     )
 
 
+@router.delete("/history/clear-all", response_model=DeleteHistoryResponse)
+async def clear_all_history(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear all history entries for current user."""
+
+    # Check if user is PRO
+    if current_user.role.value not in ["PRO", "ADMIN"]:
+        raise HTTPException(status_code=403, detail="Only PRO users can manage history")
+
+    await db.execute(
+        delete(UserClipHistory).where(UserClipHistory.user_id == current_user.id)
+    )
+    await db.commit()
+
+    return DeleteHistoryResponse(
+        status="success",
+        message="All history cleared",
+    )
+
+
 @router.delete("/history/{history_id}", response_model=DeleteHistoryResponse)
 async def delete_history_entry(
     history_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a clip from user's history."""
+    """Delete a specific history entry by its UUID."""
 
     # Check if user is PRO
     if current_user.role.value not in ["PRO", "ADMIN"]:
@@ -152,26 +175,4 @@ async def delete_history_entry(
     return DeleteHistoryResponse(
         status="success",
         message="Clip removed from history",
-    )
-
-
-@router.delete("/history/clear-all", response_model=DeleteHistoryResponse)
-async def clear_all_history(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Clear all history entries for current user."""
-
-    # Check if user is PRO
-    if current_user.role.value not in ["PRO", "ADMIN"]:
-        raise HTTPException(status_code=403, detail="Only PRO users can manage history")
-
-    await db.execute(
-        delete(UserClipHistory).where(UserClipHistory.user_id == current_user.id)
-    )
-    await db.commit()
-
-    return DeleteHistoryResponse(
-        status="success",
-        message="All history cleared",
     )

@@ -1,15 +1,15 @@
 import base64
 import json
-import os
-from typing import Dict, Any
 from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel, EmailStr, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from backend.api.v1.deps import get_current_user
+from backend.core.config import get_settings
 from backend.core.database import get_db
 from backend.core.security import (
     verify_password,
@@ -18,9 +18,8 @@ from backend.core.security import (
 )
 from backend.core.twitch_oauth import TwitchOAuth
 from backend.models import User, UserRole, UserStreamer
-from backend.api.v1.deps import get_current_user
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 security = HTTPBearer()
 
 twitch_oauth = TwitchOAuth()
@@ -68,6 +67,10 @@ class TokenResponse(BaseModel):
 
 class TwitchLoginResponse(BaseModel):
     authorization_url: str
+
+
+class TwitchLinkRequest(BaseModel):
+    code: str
 
 
 @router.post("/register", response_model=TokenResponse)
@@ -153,7 +156,7 @@ async def twitch_callback(
             detail="User not found. Please login first.",
         )
 
-    token_data = twitch_oauth.exchange_code_for_token(code)
+    token_data = await twitch_oauth.exchange_code_for_token(code)
     if not token_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -163,7 +166,7 @@ async def twitch_callback(
     access_token = token_data.get("access_token") or ""
     refresh_token = token_data.get("refresh_token") or ""
 
-    user_info = twitch_oauth.get_user_info(access_token)
+    user_info = await twitch_oauth.get_user_info(access_token)
     if not user_info:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -176,8 +179,7 @@ async def twitch_callback(
     user.twitch_refresh_token = refresh_token
     await db.commit()
 
-    # Build redirect URL using environment variable + URL encoding
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    frontend_url = get_settings().frontend_url
     params = urlencode({"twitch_linked": "true", "username": user_info["display_name"]})
 
     return RedirectResponse(url=f"{frontend_url}?{params}", status_code=302)
@@ -185,12 +187,12 @@ async def twitch_callback(
 
 @router.post("/twitch/link")
 async def link_twitch_account(
-    code: str,
+    request: TwitchLinkRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Link Twitch account to existing user (user must be logged in)"""
-    token_data = twitch_oauth.exchange_code_for_token(code)
+    token_data = await twitch_oauth.exchange_code_for_token(request.code)
     if not token_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -200,7 +202,7 @@ async def link_twitch_account(
     access_token = token_data.get("access_token") or ""
     refresh_token = token_data.get("refresh_token") or ""
 
-    user_info = twitch_oauth.get_user_info(access_token)
+    user_info = await twitch_oauth.get_user_info(access_token)
     if not user_info:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

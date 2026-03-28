@@ -1,6 +1,3 @@
-import sys
-import json
-from pathlib import Path
 from typing import Dict, List, Optional, Any, Set
 from datetime import datetime, timezone
 import asyncio
@@ -9,8 +6,6 @@ from fastapi import WebSocket
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +62,7 @@ class ConnectionManager:
         await self.broadcast(message)
 
 
-from core import (
+from backend.engine import (  # noqa: E402
     Config,
     TwitchClient,
     StateManager as CoreStateManager,
@@ -205,7 +200,6 @@ class AppState:
         # (e.g. /clip/{clip_id}/video-url) can resolve them by slug.
         try:
             from backend.core.database import async_session_maker
-            from backend.models import Clip
 
             if async_session_maker is not None and queue:
                 async with async_session_maker() as db:
@@ -220,8 +214,10 @@ class AppState:
         return queue
 
     async def _upsert_clips(self, db: AsyncSession, clips: List[Dict[str, Any]]) -> None:
+        from datetime import datetime, timezone
         from backend.models import Clip
 
+        current_month = datetime.now(timezone.utc).strftime("%Y-%m")
         changed = False
         for clip_data in clips:
             twitch_clip_id = str(clip_data.get("id") or "").strip()
@@ -239,6 +235,7 @@ class AppState:
                     thumbnail_url=clip_data.get("thumbnail_url") or "",
                     view_count=int(clip_data.get("view_count") or 0),
                     creator_name=clip_data.get("creator_name") or "",
+                    month_key=current_month,
                 )
                 db.add(clip)
                 changed = True
@@ -395,15 +392,6 @@ class AppState:
         # Add rank numbers to each clip for frontend
         for idx, clip in enumerate(ranked_clips):
             clip["rank"] = idx + 1
-            IMPORTANT_FIELDS = {
-                "rank",
-                "clip_id",
-                "score",
-                "likes",
-                "title",
-                "creator",
-                "thumbnail_url",
-            }
             # Ensure required fields exist
             if "clip_id" not in clip and "id" in clip:
                 clip["clip_id"] = clip["id"]
