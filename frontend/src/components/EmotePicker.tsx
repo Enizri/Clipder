@@ -32,6 +32,12 @@ export const EmotePicker: React.FC<EmotePickerProps> = ({ onSelect, onClose }) =
     return [];
   }, [emotes, activeTab]);
 
+  /**
+  TODO:
+    use that api endpoint for emotes from twitch
+    GET https://api.twitch.tv/helix/chat/emotes/global
+   */
+  
   return (
     <div className="emote-picker-popup">
       <div className="emote-picker-header">

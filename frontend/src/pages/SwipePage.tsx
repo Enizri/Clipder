@@ -8,6 +8,9 @@ import type { Clip, User } from '../types';
 
 const GUEST_SWIPE_LIMIT = 15;
 
+const isViteDev = (): boolean =>
+  Boolean((import.meta as { env?: { DEV?: boolean } }).env?.DEV);
+
 const getGuestSwipeCount = (): number => {
   try {
     return parseInt(localStorage.getItem('guestSwipeCount') || '0', 10);
@@ -62,8 +65,12 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
   const [currentIndex, setCurrentIndex] = useState(0);
   // Tracks whether the guest hit the swipe wall (shown as hard block)
   const [showAuthWall, setShowAuthWall] = useState(false);
-  const [categories, setCategories] = useState<string[]>(['My Streamers']);
+  const [categories, setCategories] = useState<string[]>(['My Streamers', 'For You']);
   const [currentCategory, setCurrentCategory] = useState('My Streamers');
+  const [followedStreamers, setFollowedStreamers] = useState<
+    { id: number; streamer_name: string; streamer_id: string }[]
+  >([]);
+  const [selectedStreamerId, setSelectedStreamerId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showCategoriesMenu, setShowCategoriesMenu] = useState(false);
   const [rejectHighlight, setRejectHighlight] = useState(false);
@@ -86,16 +93,38 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
   useEffect(() => {
     api
       .getCategories()
-      .then((data) => setCategories(['My Streamers', ...data.categories]))
+      .then((data) => {
+        const rest = Array.isArray(data.categories) ? data.categories : [];
+        setCategories(['My Streamers', 'For You', ...rest]);
+      })
       .catch(() => {
         // Categories failed — default stays in place
       });
   }, []);
 
   useEffect(() => {
+    if (!user) {
+      setFollowedStreamers([]);
+      setSelectedStreamerId(null);
+      return;
+    }
+    api
+      .getFollowing()
+      .then((rows) => setFollowedStreamers(Array.isArray(rows) ? rows : []))
+      .catch((err) => {
+        if (isViteDev()) console.warn('Could not load followed streamers', err);
+      });
+  }, [user]);
+
+  const clipQueryStreamerId =
+    user && currentCategory === 'My Streamers' && selectedStreamerId
+      ? selectedStreamerId
+      : undefined;
+
+  useEffect(() => {
     setLoading(true);
     api
-      .getClips(currentCategory)
+      .getClips(currentCategory, clipQueryStreamerId)
       .then((data) => {
         if (!data?.clips || !Array.isArray(data.clips)) {
           setClips([]);
@@ -104,9 +133,12 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
         setClips(data.clips);
         setCurrentIndex(0);
       })
-      .catch(() => setClips([]))
+      .catch((err) => {
+        if (isViteDev()) console.warn('getClips failed', err);
+        setClips([]);
+      })
       .finally(() => setLoading(false));
-  }, [currentCategory]);
+  }, [currentCategory, clipQueryStreamerId]);
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -184,7 +216,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
         const newIndex = currentIndex + 1;
         if (newIndex >= clips.length - 2) {
           api
-            .getClips(currentCategory)
+            .getClips(currentCategory, clipQueryStreamerId)
             .then((data) => {
               const seenIds = getSeenClipIds();
               const fresh = data.clips.filter((c) => !seenIds.has(c.id));
@@ -192,7 +224,9 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
                 setClips((prev) => [...prev.filter((c) => !seenIds.has(c.id)), ...fresh]);
               }
             })
-            .catch(() => {});
+            .catch((err) => {
+              if (isViteDev()) console.warn('Prefetch clips failed', err);
+            });
         }
 
         setCurrentIndex(newIndex);
@@ -201,7 +235,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
         isSwiping.current = false;
       }, 320);
     },
-    [clips, currentIndex, stopAllVideos, user, currentCategory]
+    [clips, currentIndex, stopAllVideos, user, currentCategory, clipQueryStreamerId]
   );
 
   // ---------------------------------------------------------------------------
@@ -329,8 +363,36 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
           {/* LEFT SIDEBAR — category picker */}
           <div className="swipe-sidebar">
             <div className="streamers-section">
-              <h4>Currently Viewing</h4>
-              <p>{currentCategory}</p>
+              <h4>Currently viewing</h4>
+              <p className="current-category-label">{currentCategory}</p>
+              {user && currentCategory === 'My Streamers' && followedStreamers.length > 0 && (
+                <label className="streamer-picker">
+                  <span className="streamer-picker-label">Your streamers</span>
+                  <select
+                    className="streamer-picker-select"
+                    value={selectedStreamerId ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setSelectedStreamerId(v === '' ? null : v);
+                      stopAllVideos();
+                      setClips([]);
+                      setCurrentIndex(0);
+                    }}
+                  >
+                    <option value="">All followed</option>
+                    {followedStreamers.map((s) => (
+                      <option key={s.streamer_id} value={s.streamer_id}>
+                        {s.streamer_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {user && currentCategory === 'My Streamers' && followedStreamers.length === 0 && !loading && (
+                <p className="streamer-picker-hint">
+                  Add streamers in your profile to see them here.
+                </p>
+              )}
             </div>
 
             <button

@@ -77,3 +77,4 @@ nul
 # Runtime directories (created by the clip processing engine)
 clips_to_process/
 processed_clips/
+TASKS

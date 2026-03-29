@@ -44,14 +44,18 @@ def get_scheduler() -> AsyncIOScheduler:
 # ==============================================================================
 
 
-async def job_calculate_top_10() -> None:
+async def job_calculate_top_10(*, force_broadcast: bool = False) -> None:
     """
     Job 1: Calculate and update top 10 rankings every 5 seconds.
 
     - Fetch top 10 clips for current month
     - Compare with cached version
     - If changed, update cache and broadcast via WebSocket
-    - Record snapshot in leaderboard_snapshots table
+    - Record snapshot in leaderboard_snapshots table when the ranking changes
+
+    Args:
+        force_broadcast: When True (e.g. immediately after a vote), always refresh
+            cache + WebSocket so clients never miss a like-count update.
     """
     try:
         # Initialize database if needed
@@ -75,7 +79,11 @@ async def job_calculate_top_10() -> None:
                         (Clip.month_key == current_month)
                         & (Clip.monthly_likes > 0)
                     )
-                    .order_by((Clip.monthly_likes - Clip.monthly_dislikes).desc())
+                    .order_by(
+                        (Clip.monthly_likes - Clip.monthly_dislikes).desc(),
+                        Clip.monthly_likes.desc(),
+                        Clip.view_count.desc(),
+                    )
                     .limit(10)
                 )
                 clips = result.scalars().all()
@@ -86,7 +94,45 @@ async def job_calculate_top_10() -> None:
                 return
 
             if not clips:
-                logger.debug(f"No clips found for month {current_month}")
+                # Leaderboard became empty but cache may still show old top 10 — sync clients + DB.
+                prior_top = await cache.get_top_10(current_month)
+                if prior_top:
+                    rank_clear = await db.execute(
+                        select(Clip).where(
+                            Clip.month_key == current_month,
+                            Clip.current_rank.is_not(None),
+                        )
+                    )
+                    for clip_row in rank_clear.scalars():
+                        clip_row.current_rank = None
+                    await cache.set_top_10(current_month, [])
+                    await db.commit()
+                    connection_manager = ConnectionManager.get_instance()
+                    await connection_manager.broadcast_leaderboard_changes(
+                        {
+                            "clips_entered": [],
+                            "clips_exited": [
+                                {"clip_id": c["clip_id"]} for c in prior_top
+                            ],
+                            "position_changes": [],
+                            "top_10": [],
+                        }
+                    )
+                    try:
+                        db.add(
+                            LeaderboardSnapshot(
+                                snapshot_month=current_month,
+                                snapshot_timestamp=datetime.now(timezone.utc),
+                                ranking=[],
+                            )
+                        )
+                        await db.commit()
+                    except Exception as snap_error:
+                        logger.error(
+                            f"Failed to record empty leaderboard snapshot: {snap_error}",
+                            exc_info=True,
+                        )
+                logger.debug("No clips with likes for month %s", current_month)
                 return
 
             # Format new top 10
@@ -154,6 +200,9 @@ async def job_calculate_top_10() -> None:
                                 changed = True
                             break
 
+            if force_broadcast:
+                changed = True
+
             # Update cache if changed
             if changed:
                 await cache.set_top_10(current_month, new_top_10)
@@ -174,17 +223,18 @@ async def job_calculate_top_10() -> None:
                 changes["top_10"] = new_top_10
                 await connection_manager.broadcast_leaderboard_changes(changes)
 
-            # Record snapshot in leaderboard_snapshots AFTER broadcast
-            try:
-                snapshot = LeaderboardSnapshot(
-                    snapshot_month=current_month,
-                    snapshot_timestamp=datetime.now(timezone.utc),
-                    ranking=new_top_10,
-                )
-                db.add(snapshot)
-                await db.commit()
-            except Exception as snap_error:
-                logger.error(f"Failed to record snapshot: {snap_error}", exc_info=True)
+                try:
+                    snapshot = LeaderboardSnapshot(
+                        snapshot_month=current_month,
+                        snapshot_timestamp=datetime.now(timezone.utc),
+                        ranking=new_top_10,
+                    )
+                    db.add(snapshot)
+                    await db.commit()
+                except Exception as snap_error:
+                    logger.error(
+                        f"Failed to record snapshot: {snap_error}", exc_info=True
+                    )
 
     except Exception as e:
         logger.error(f"Error in job_calculate_top_10: {e}", exc_info=True)

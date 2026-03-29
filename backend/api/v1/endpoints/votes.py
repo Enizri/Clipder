@@ -69,6 +69,10 @@ async def vote_on_clip(
         if not fresh:
             raise HTTPException(status_code=404, detail="Clip not found")
         logger.debug("User %s re-voted %s on clip %s (idempotent)", current_user.id, vote_type, clip.id)
+        try:
+            await job_calculate_top_10(force_broadcast=True)
+        except Exception as e:
+            logger.warning("Leaderboard refresh failed after idempotent vote: %s", e)
         return {
             "status": "success",
             "clip_id": fresh.id,
@@ -81,7 +85,7 @@ async def vote_on_clip(
 
     # Trigger immediate leaderboard refresh — scheduler is fallback every 5s
     try:
-        await job_calculate_top_10()
+        await job_calculate_top_10(force_broadcast=True)
     except Exception as e:
         logger.warning("Leaderboard refresh failed after vote: %s", e)
 

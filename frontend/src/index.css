@@ -680,6 +680,68 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
 /* Section subtitle */
 .section-subtitle { color: #666; font-size: 0.9em; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
 
+/* Swipe: followed streamer picker */
+.current-category-label { font-weight: 600; color: #c4b5fd; margin: 0 0 10px; }
+.streamer-picker { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.streamer-picker-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: #888; }
+.streamer-picker-select {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  background: linear-gradient(180deg, rgba(20, 18, 28, 0.95), rgba(14, 12, 22, 0.98));
+  color: #e8e4f5;
+  font-size: 0.9rem;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+.streamer-picker-select:focus { outline: none; border-color: rgba(236, 72, 153, 0.55); box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2); }
+.streamer-picker-hint { font-size: 0.82rem; color: #7a738f; margin-top: 8px; line-height: 1.4; }
+
+/* Leaderboard — cozy / premium panel */
+.leaderboard-cozy {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 28px 24px 36px;
+  border-radius: 20px;
+  background:
+    radial-gradient(ellipse 120% 80% at 50% -20%, rgba(139, 92, 246, 0.18), transparent 55%),
+    linear-gradient(165deg, rgba(22, 20, 32, 0.92), rgba(12, 10, 20, 0.97));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 24px 48px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.leaderboard-cozy .section-title {
+  font-size: 1.65rem;
+  margin-bottom: 6px;
+  letter-spacing: -0.02em;
+}
+.leaderboard-cozy .section-subtitle { color: #9b92b8; margin-bottom: 24px; }
+.leaderboard-cozy .list-item {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 16px;
+  padding: 14px 18px;
+  backdrop-filter: blur(8px);
+}
+.leaderboard-cozy .list-item:hover {
+  border-color: rgba(167, 139, 250, 0.35);
+  box-shadow: 0 12px 40px rgba(139, 92, 246, 0.12);
+}
+.leaderboard-live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 12px rgba(74, 222, 128, 0.7);
+  margin-right: 8px;
+  vertical-align: middle;
+}
+.lb-error { color: #f9a8d4; }
+.lb-empty { line-height: 1.55; }
+
 /* Responsive: small screens */
 @media (max-width: 480px) {
     .hero-inner {

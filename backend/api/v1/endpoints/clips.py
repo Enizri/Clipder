@@ -9,11 +9,10 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-_clips_logger = logging.getLogger(__name__)
-
 from backend.core.state import AppState, get_state
 from backend.core.database import get_db
-from backend.models import Clip
+from backend.api.v1.deps import get_current_user_optional
+from backend.models import Clip, User, UserStreamer
 from backend.schemas.clip import (
     ClipResponse,
     ClipsResponse,
@@ -23,6 +22,8 @@ from backend.schemas.clip import (
     CategoryResponse,
     EmoteResponse,
 )
+
+_clips_logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["clips"])
 
@@ -369,11 +370,20 @@ def _db_clip_to_response(clip: Clip) -> ClipResponse:
     )
 
 
-async def _background_refresh(category: str) -> None:
+async def _background_refresh(
+    category: str,
+    *,
+    storage_key: Optional[str] = None,
+    channel_names: Optional[List[str]] = None,
+) -> None:
     """Fetch fresh clips from Twitch in the background so the next request is fast."""
     try:
         state = await asyncio.wait_for(AppState.get_instance(), timeout=60.0)
-        await state.fetch_clips(category)
+        await state.fetch_clips(
+            category,
+            cache_key=storage_key or category,
+            channel_names=channel_names,
+        )
     except Exception as exc:
         _clips_logger.debug("Background Twitch refresh failed: %s", exc)
 
@@ -381,6 +391,11 @@ async def _background_refresh(category: str) -> None:
 @router.get("/clips", response_model=ClipsResponse)
 async def get_clips(
     category: str = "My Streamers",
+    streamer_id: Optional[str] = Query(
+        None,
+        description="When logged in on My Streamers, filter to this followed streamer's Twitch id",
+    ),
+    current_user: Optional[User] = Depends(get_current_user_optional),
     db: AsyncSession = Depends(get_db),
 ) -> ClipsResponse:
     """
@@ -390,40 +405,80 @@ async def get_clips(
     1. AppState in-memory cache — zero latency when warm (subsequent requests)
     2. DB rows — fast async query; covers the cold-start window
     3. Block on Twitch API — only when DB is truly empty (first ever run)
+
+    Logged-in "My Streamers" uses rows from `/api/v1/following`, not the global channel list.
     """
-    # --- Fast path: AppState already has a warm cache for this category ---
+    storage_key = category
+    channel_names_override: Optional[List[str]] = None
+
+    if category == "My Streamers" and current_user is not None:
+        follow_result = await db.execute(
+            select(UserStreamer).where(UserStreamer.user_id == current_user.id)
+        )
+        follow_rows = list(follow_result.scalars().all())
+        if not follow_rows:
+            return ClipsResponse(clips=[], total=0)
+        if streamer_id is not None:
+            follow_rows = [r for r in follow_rows if r.streamer_id == streamer_id]
+            if not follow_rows:
+                return ClipsResponse(clips=[], total=0)
+        channel_names_override = [r.streamer_name for r in follow_rows]
+        suffix = streamer_id if streamer_id is not None else "all"
+        storage_key = f"__ms_u{current_user.id}_{suffix}__"
+
+    # --- Fast path: AppState already has a warm cache for this feed key ---
     if AppState._instance is not None:
-        queue = AppState._instance.category_queues.get(category)
+        queue = AppState._instance.category_queues.get(storage_key)
         if queue:
             state = AppState._instance
+            twitch_ids = [str(c["id"]) for c in queue if c.get("id") is not None]
+            likes_map: Dict[str, int] = {}
+            if twitch_ids:
+                likes_rows = await db.execute(
+                    select(Clip.twitch_clip_id, Clip.monthly_likes).where(
+                        Clip.twitch_clip_id.in_(twitch_ids)
+                    )
+                )
+                likes_map = {
+                    str(row[0]): int(row[1] or 0) for row in likes_rows.all()
+                }
             for clip in queue:
-                clip["local_likes"] = state.clip_scores.get(clip["id"], 0)
+                tid = str(clip.get("id") or "")
+                clip["local_likes"] = likes_map.get(tid, 0)
                 clip["comment_count"] = len(state.clip_comments.get(clip["id"], []))
             return ClipsResponse(
                 clips=[ClipResponse.model_validate(c) for c in queue],
                 total=len(queue),
             )
 
-    # --- DB fallback: serve stored clips while Twitch warms up in background ---
+    # --- DB fallback: engagement-ranked clips while Twitch warms up in background ---
     current_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    score_order = (
+        (Clip.monthly_likes - Clip.monthly_dislikes).desc(),
+        Clip.monthly_likes.desc(),
+        Clip.view_count.desc(),
+        Clip.created_at.desc(),
+    )
     result = await db.execute(
         select(Clip)
         .where(Clip.month_key == current_month)
-        .order_by(Clip.view_count.desc())
+        .order_by(*score_order)
         .limit(30)
     )
     db_clips = result.scalars().all()
 
     if not db_clips:
-        # Try any month — covers a server that just had its DB seeded with older data
-        result = await db.execute(
-            select(Clip).order_by(Clip.view_count.desc()).limit(30)
-        )
+        result = await db.execute(select(Clip).order_by(*score_order).limit(30))
         db_clips = result.scalars().all()
 
     if db_clips:
-        # Kick off a Twitch refresh in background so the next request hits the fast path
-        asyncio.create_task(_background_refresh(category))
+        asyncio.create_task(
+            _background_refresh(
+                category,
+                storage_key=storage_key,
+                channel_names=channel_names_override,
+            )
+        )
         return ClipsResponse(
             clips=[_db_clip_to_response(c) for c in db_clips],
             total=len(db_clips),
@@ -433,7 +488,14 @@ async def get_clips(
     _clips_logger.info("DB empty — waiting for Twitch fetch for category '%s'", category)
     try:
         state = await asyncio.wait_for(AppState.get_instance(), timeout=5.0)
-        clips = await asyncio.wait_for(state.fetch_clips(category), timeout=25.0)
+        clips = await asyncio.wait_for(
+            state.fetch_clips(
+                category,
+                cache_key=storage_key,
+                channel_names=channel_names_override,
+            ),
+            timeout=25.0,
+        )
     except asyncio.TimeoutError:
         _clips_logger.warning("Timed out waiting for initial Twitch fetch")
         clips = []

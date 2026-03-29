@@ -31,7 +31,9 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   };
 
   // Add auth header only for routes that require authentication
+  // Include /clips so optional-auth feed (My Streamers from follows) gets the JWT when present.
   const requiresAuth = [
+    '/clips',
     '/votes',
     '/following',
     '/admin',
@@ -95,8 +97,11 @@ export const api = {
   // CLIPS
   // ===========================================================================
 
-  getClips: (category = 'My Streamers'): Promise<ClipsResponse> =>
-    fetchJson<ClipsResponse>(`/clips?category=${encodeURIComponent(category)}`),
+  getClips: (category = 'My Streamers', streamerId?: string | null): Promise<ClipsResponse> => {
+    const params = new URLSearchParams({ category });
+    if (streamerId) params.set('streamer_id', streamerId);
+    return fetchJson<ClipsResponse>(`/clips?${params.toString()}`);
+  },
 
   getCategories: (): Promise<{ categories: string[] }> => fetchJson('/categories'),
 

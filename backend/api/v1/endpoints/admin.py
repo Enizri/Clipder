@@ -11,9 +11,7 @@ from backend.schemas.admin import (
     ProcessRequest,
     ProcessStatusResponse,
 )
-
 router = APIRouter(prefix="/api/v1", tags=["admin"])
-
 
 @router.post("/admin/queue", response_model=QueueStatusResponse)
 async def add_to_admin_queue(

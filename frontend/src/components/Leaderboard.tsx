@@ -19,15 +19,22 @@ interface LeaderboardProps {
 export const Leaderboard: React.FC<LeaderboardProps> = ({ onOpenComments }) => {
     const { leaderboard, error } = useLeaderboard();
 
-    if (error) return <div className="empty-msg" style={{ color: '#ff6b9d' }}>Error: {error}</div>;
+    if (error) return <div className="empty-msg lb-error" role="alert">{error}</div>;
 
     return (
-        <div className="list-container">
-            <h2 className="section-title">🏆 Top Viral Clips</h2>
-            <div className="section-subtitle">Ranked by your swipes. Hover to preview!</div>
+        <div className="leaderboard-cozy">
+            <h2 className="section-title">This month&apos;s standouts</h2>
+            <div className="section-subtitle">
+                <span className="leaderboard-live-dot" aria-hidden />
+                Live rankings from swipes · hover a row to preview
+            </div>
 
             {leaderboard.length === 0 ? (
-                <div className="empty-msg">No clips have been liked yet!<br />Go swipe right to build the leaderboard.</div>
+                <div className="empty-msg lb-empty">
+                    No likes yet this month.
+                    <br />
+                    Swipe right on the feed to grow the board.
+                </div>
             ) : (
                 leaderboard.map((clip) => (
                     <MemoizedLeaderboardRow 
