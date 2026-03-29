@@ -1,6 +1,8 @@
-from typing import List, Dict, Any
+import logging
+from typing import List, Dict, Any, Set
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -12,6 +14,40 @@ from backend.api.v1.deps import get_current_user
 router = APIRouter(prefix="/api/v1/following", tags=["following"])
 
 twitch_oauth = TwitchOAuth()
+logger = logging.getLogger(__name__)
+
+
+async def sync_twitch_follows_for_user(db: AsyncSession, user: User) -> int:
+    """
+    Insert UserStreamer rows for Twitch channels this user follows on Twitch.
+    Does not commit — caller commits. Idempotent with existing streamer_id rows.
+    """
+    if not user.twitch_id or not user.twitch_access_token:
+        return 0
+
+    follows = await twitch_oauth.get_user_follows(
+        user.twitch_access_token,
+        user.twitch_id,
+    )
+
+    result = await db.execute(
+        select(UserStreamer.streamer_id).where(UserStreamer.user_id == user.id)
+    )
+    existing_streamer_ids = set(row[0] for row in result.all())
+
+    added = 0
+    for follow in follows:
+        if follow["to_id"] not in existing_streamer_ids:
+            streamer = UserStreamer(
+                user_id=user.id,
+                streamer_name=follow["to_name"],
+                streamer_id=follow["to_id"],
+                include_in_for_you=True,
+            )
+            db.add(streamer)
+            added += 1
+
+    return added
 
 
 class StreamerResponse(BaseModel):
@@ -20,6 +56,13 @@ class StreamerResponse(BaseModel):
     id: int
     streamer_name: str
     streamer_id: str
+    include_in_for_you: bool = True
+
+
+class ForYouSelectionRequest(BaseModel):
+    """Exact set of Twitch user ids that should appear in For You (must be existing follows)."""
+
+    streamer_ids: List[str] = Field(default_factory=list)
 
 
 class AddStreamerRequest(BaseModel):
@@ -75,6 +118,7 @@ async def add_streamer(
         user_id=current_user.id,
         streamer_name=request.streamer_name,
         streamer_id=request.streamer_id,
+        include_in_for_you=True,
     )
     db.add(streamer)
     await db.commit()
@@ -147,43 +191,35 @@ async def sync_with_twitch(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
-    """Sync user's streamers with their Twitch follows
-
-    Optimized to avoid N+1 queries by batch-loading existing streamers.
-    """
+    """Sync user's streamers with their Twitch follows (same helper as post-OAuth)."""
     if not current_user.twitch_id or not current_user.twitch_access_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Twitch account not linked",
         )
 
-    follows = await twitch_oauth.get_user_follows(
-        current_user.twitch_access_token,
-        current_user.twitch_id,
-    )
-
-    # ==================================================================
-    # OPTIMIZATION: Batch-load all existing streamers for this user
-    # Instead of checking each one individually (N+1 problem)
-    # ==================================================================
-    result = await db.execute(
-        select(UserStreamer.streamer_id).where(UserStreamer.user_id == current_user.id)
-    )
-    existing_streamer_ids = set(row[0] for row in result.all())
-
-    # ==================================================================
-    # Add only new streamers
-    # ==================================================================
-    added = 0
-    for follow in follows:
-        if follow["to_id"] not in existing_streamer_ids:
-            streamer = UserStreamer(
-                user_id=current_user.id,
-                streamer_name=follow["to_name"],
-                streamer_id=follow["to_id"],
-            )
-            db.add(streamer)
-            added += 1
-
+    added = await sync_twitch_follows_for_user(db, current_user)
     await db.commit()
     return {"status": "synced", "added": added}
+
+
+@router.put("/for-you", response_model=Dict[str, Any])
+async def set_for_you_inclusion(
+    body: ForYouSelectionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Mark which followed channels are included in the For You feed. Omitted follows become excluded."""
+    result = await db.execute(
+        select(UserStreamer).where(UserStreamer.user_id == current_user.id)
+    )
+    rows = list(result.scalars().all())
+    if not rows:
+        return {"status": "ok", "included_count": 0}
+
+    allowed: Set[str] = {r.streamer_id for r in rows}
+    selected: Set[str] = {s for s in body.streamer_ids if s in allowed}
+    for r in rows:
+        r.include_in_for_you = r.streamer_id in selected
+    await db.commit()
+    return {"status": "ok", "included_count": sum(1 for r in rows if r.include_in_for_you)}

@@ -161,24 +161,9 @@ class AppState:
                     final_queue.append(channel_queues[channel].pop(0))
         return final_queue
 
-    def _fetch_clips_for_you(self) -> List[Dict[str, Any]]:
-        """Discovery feed: shuffle configured channels, then same round-robin as My Streamers."""
-        names = [c.strip() for c in self.config.twitch_channels if c and str(c).strip()]
-        if not names:
-            return []
-        shuffled = names[:]
-        random.shuffle(shuffled)
-        return self._fetch_clips_for_channel_list(shuffled)
-
     def _fetch_clips_for_category(self, category_name: str) -> List[Dict[str, Any]]:
         if not self.bot_initialized:
             return []
-
-        if category_name == "For You":
-            return self._fetch_clips_for_you()
-
-        if category_name == "My Streamers":
-            return self._fetch_clips_for_channel_list(list(self.config.twitch_channels))
 
         else:
             if not hasattr(self.twitch_client, "get_game_id"):
@@ -249,11 +234,13 @@ class AppState:
         *,
         cache_key: Optional[str] = None,
         channel_names: Optional[List[str]] = None,
+        shuffle_queue: bool = False,
     ) -> List[Dict[str, Any]]:
         """
-        cache_key: Separate in-memory queue key (e.g. per-user "My Streamers").
+        cache_key: Separate in-memory queue key (e.g. per-user "For You").
         channel_names: When set, fetch clips only for these channels instead of
-            interpreting `category` as a game tab or default channel list.
+            interpreting `category` as a Twitch game/category name.
+        shuffle_queue: Randomize order after fetch (explore-style game feeds).
         """
         storage_key = cache_key or category
         fresh_fetch = False
@@ -267,10 +254,14 @@ class AppState:
                 return self._fetch_clips_for_category(category)
 
             try:
-                self.category_queues[storage_key] = await asyncio.wait_for(
+                queue_result = await asyncio.wait_for(
                     loop.run_in_executor(None, _sync_fetch),
                     timeout=30.0,
                 )
+                if shuffle_queue and queue_result:
+                    queue_result = list(queue_result)
+                    random.shuffle(queue_result)
+                self.category_queues[storage_key] = queue_result
             except asyncio.TimeoutError:
                 logger.warning("fetch_clips timed out after 30 s for key '%s'", storage_key)
                 self.category_queues[storage_key] = []

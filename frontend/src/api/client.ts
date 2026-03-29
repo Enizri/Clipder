@@ -9,6 +9,8 @@ import type {
   ProcessStatusResponse,
   EmoteResponse,
   User,
+  Streamer,
+  SearchChannel,
 } from '../types';
 
 const getConfiguredApiOrigin = (): string | null => {
@@ -77,8 +79,13 @@ export const api = {
   // FOLLOWING
   // ===========================================================================
 
-  getFollowing: (): Promise<{ id: number; streamer_name: string; streamer_id: string }[]> =>
-    fetchJson('/following'),
+  getFollowing: (): Promise<Streamer[]> => fetchJson('/following'),
+
+  setForYouStreamers: (streamerIds: string[]): Promise<{ status: string; included_count: number }> =>
+    fetchJson('/following/for-you', {
+      method: 'PUT',
+      body: JSON.stringify({ streamer_ids: streamerIds }),
+    }),
 
   addFollowing: (streamer_name: string, streamer_id: string): Promise<unknown> =>
     fetchJson('/following', { method: 'POST', body: JSON.stringify({ streamer_name, streamer_id }) }),
@@ -88,18 +95,23 @@ export const api = {
 
   getTwitchFollows: (): Promise<unknown[]> => fetchJson('/following/twitch/follows'),
 
-  searchChannels: (query: string): Promise<unknown[]> =>
+  searchChannels: (query: string): Promise<SearchChannel[]> =>
     fetchJson(`/following/search?q=${encodeURIComponent(query)}`),
 
-  syncFollows: (): Promise<unknown> => fetchJson('/following/sync', { method: 'POST' }),
+  syncFollows: (): Promise<{ status: string; added: number }> =>
+    fetchJson('/following/sync', { method: 'POST' }),
 
   // ===========================================================================
   // CLIPS
   // ===========================================================================
 
-  getClips: (category = 'My Streamers', streamerId?: string | null): Promise<ClipsResponse> => {
+  getClips: (opts?: {
+    category?: string;
+    exploreCategory?: string | null;
+  }): Promise<ClipsResponse> => {
+    const category = opts?.category ?? 'My Streamers';
     const params = new URLSearchParams({ category });
-    if (streamerId) params.set('streamer_id', streamerId);
+    if (opts?.exploreCategory) params.set('explore_category', opts.exploreCategory);
     return fetchJson<ClipsResponse>(`/clips?${params.toString()}`);
   },
 

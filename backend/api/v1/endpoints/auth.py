@@ -1,3 +1,4 @@
+import logging
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -12,8 +13,10 @@ from backend.core.database import get_db
 from backend.core.security import create_access_token
 from backend.core.twitch_oauth import TwitchOAuth
 from backend.models import User, UserRole
+from backend.api.v1.endpoints.following import sync_twitch_follows_for_user
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 twitch_oauth = TwitchOAuth()
 
@@ -109,6 +112,25 @@ async def twitch_callback(
         user.twitch_access_token = twitch_access
         user.twitch_refresh_token = twitch_refresh
         await db.commit()
+
+    # Import Twitch follows into user_streamers immediately after link (idempotent).
+    try:
+        added_follows = await sync_twitch_follows_for_user(db, user)
+        await db.commit()
+        if added_follows:
+            logger.info(
+                "Twitch OAuth: synced %s new follows for user_id=%s",
+                added_follows,
+                user.id,
+            )
+    except Exception as exc:
+        logger.warning(
+            "Twitch OAuth: follow sync failed for user_id=%s (login still succeeds): %s",
+            user.id,
+            exc,
+            exc_info=True,
+        )
+        await db.rollback()
 
     jwt = create_access_token(data={"sub": str(user.id)})
     frontend_url = get_settings().frontend_url

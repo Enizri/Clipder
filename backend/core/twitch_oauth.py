@@ -1,6 +1,6 @@
 import logging
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -113,7 +113,7 @@ class TwitchOAuth:
     async def search_channels(
         self, query: str, access_token: str
     ) -> List[Dict[str, Any]]:
-        url = f"https://api.twitch.tv/helix/search/channels?query={query}"
+        url = f"https://api.twitch.tv/helix/search/channels?query={quote(query)}"
         headers = {
             "Client-ID": self.client_id,
             "Authorization": f"Bearer {access_token}",

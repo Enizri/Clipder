@@ -121,6 +121,7 @@ export interface Streamer {
   id: number;
   streamer_name: string;
   streamer_id: string;
+  include_in_for_you: boolean;
 }
 
 export interface TwitchFollow {
