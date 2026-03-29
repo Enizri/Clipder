@@ -111,6 +111,8 @@ ClipApp/
 │       ├── App.tsx             # BrowserRouter + layout + <Routes>
 │       ├── index.css
 │       ├── types.ts            # Single source of truth for TS interfaces
+│       ├── utils/
+│       │   └── followSearch.ts # For You: normalize query, prefix/substring filters
 │       ├── api/
 │       │   └── client.ts       # Typed API client, all paths /api/v1/*
 │       ├── pages/
@@ -126,6 +128,8 @@ ClipApp/
 │       │   ├── CommentsPanel.tsx
 │       │   ├── TheaterMode.tsx
 │       │   ├── EmotePicker.tsx
+│       │   ├── ForYouChannelPicker.tsx  # Profile: portal typeahead follows + Twitch search
+│       │   ├── CombinedFeedSearch.tsx  # Swipe: one search = feeds + channels (portal)
 │       │   ├── AiEditor.tsx
 │       │   ├── Leaderboard.tsx
 │       │   ├── AnalyticsDashboard.tsx
@@ -317,6 +321,42 @@ All calls go through `frontend/src/api/client.ts` which:
 - Parses error `detail` from FastAPI responses
 - Never swallows errors silently
 
+**GET `/api/v1/clips` (swipe feed):**
+- Query `exclude_clip_ids`: comma-separated Twitch clip IDs to omit (guest **seen** list from `localStorage`; capped server-side). When a JWT is present, the backend **union** this set with every Twitch ID the user has already **liked or disliked** (`votes` → `clips.twitch_clip_id`) so repeats do not reappear after refresh.
+- `category` values other than `My Streamers` / `For You` are treated as a **Twitch game name** (e.g. Valorant). There is **no** fallback to generic “top clips this month” from Postgres, because `clips` rows are not tagged by game — that fallback used to show the wrong category.
+- **`explore_category`**: only when `category=My Streamers`; selects which game’s clips to explore.
+- **For You channel guard**: responses are filtered so each clip’s `channel` (broadcaster login) is in the current `include_in_for_you` set (case-insensitive). That removes stale cached rows from channels you just excluded.
+
+### 5.4 Following, For You, and Twitch sync (agent reference)
+
+**Model:** `UserStreamer` (`backend/models/user_streamer.py`) stores channels tied to the user. Column `include_in_for_you` controls whether that row’s channel is included in the **For You** clip feed (`PUT /api/v1/following/for-you` sets exactly which Twitch `streamer_id` values are on).
+
+**Backend — shared sync helper** (`backend/api/v1/endpoints/following.py`):
+- `sync_twitch_follows_for_user(db, user) -> int` — calls Helix for the user’s Twitch follows and inserts missing `UserStreamer` rows (`include_in_for_you=True`). Does **not** commit; caller commits. Idempotent on `streamer_id`.
+- `POST /api/v1/following/sync` — runs the helper and commits; response `{ "status": "synced", "added": <int> }`.
+
+**Backend — OAuth** (`backend/api/v1/endpoints/auth.py`):
+- After Twitch `GET /api/v1/auth/twitch/callback` creates or updates the user and commits, the handler calls `sync_twitch_follows_for_user` in a **try/except**. On failure it logs, rolls back the sync attempt only, and **still** issues the JWT redirect so login succeeds.
+
+**Backend — channel search** (`backend/core/twitch_oauth.py`):
+- Helix `search/channels` URL must use `urllib.parse.quote` on the query string so spaces and special characters are valid.
+
+**Frontend — search utilities** (`frontend/src/utils/followSearch.ts`):
+- `normalizeFollowSearchQuery` — trim, lowercase, strip leading `@`.
+- `filterFollowedStreamersByPrefix` — list filter: prefix match first, then substring fallback if no prefix hits.
+- `suggestFollowedByPrefix` — prefix-only list (used for typeahead suggestions).
+
+**Frontend — For You picker (Profile)** (`frontend/src/components/ForYouChannelPicker.tsx`):
+- Typeahead for **For You**: combines **saved follows** (prefix suggestions from local list) with **debounced Twitch search** (`GET /following/search`, min query length 2) for channels not already in the list.
+- Dropdown is rendered with **`createPortal(..., document.body)`** and a high z-index so parent layout (e.g. swipe sidebar `overflow`) does not clip it.
+- Choosing a Twitch result: `POST /following`, then refresh list, then merge **`PUT /following/for-you`** using a **fresh `GET /following`** inside the page callback so selection state matches the DB (see `mergeForYouInclude` on `SwipePage` / `ProfilePage`).
+
+**Frontend — UX**:
+- **Profile** (`ProfilePage.tsx`): full follow list, For You checkboxes, Remove, **Refresh from Twitch**, and the same picker.
+- **Swipe** (`SwipePage.tsx`): **CombinedFeedSearch** — one field opens a portal with **Feeds** (category tabs) plus **Your channels** / **Add from Twitch** when signed in; under **For You** the checkbox list + **Select all** remain; hints point users with no follows to search or Profile sync.
+
+**Twitch OAuth scopes:** `get_authorization_url` in `twitch_oauth.py` currently requests `user:read:follows`. If Helix channel search fails with **401**, check Twitch’s current scope list and extend the authorization `scope` string and re-link flow if required.
+
 ---
 
 ## 6. Security Rules
@@ -360,87 +400,7 @@ The FastAPI `AppState` in `backend/core/state.py` wraps this engine and
 bridges it to the async web layer.
 
 ---
-
-## 9. Refactor Plan — Chunk Order
-
-This project is undergoing a full reset. Work proceeds in 7 sequential chunks.
-
-### Chunk 1: File Cleanup + CLAUDE.md
-- Delete redundant files (see list below)
-- Move `core.py` to `backend/engine.py` (update imports)
-- Generate this CLAUDE.md
-- Update AGENTS.md path references
-
-**Files to delete:**
-- `EprojectsClipAppREADME_CURRENT_STATUS.txt`
-- `FINAL_STATUS.md`
-- `CONTRIBUTING.md`
-- `verify_fixes.sh`
-- `docs/archive/` (entire directory)
-- `backend/CLAUDE.md`
-- `frontend/CLAUDE.md`
-- `tests/manual/test_phase4.sh`
-- `tests/manual/test_phase4.ps1`
-- `scripts/manual_test_workflow.py`
-
-### Chunk 2: Backend Critical Fixes + Centralized Config
-- Expand `Settings` class to own ALL env vars
-- Refactor every module to use `get_settings()` (zero `os.getenv` in backend)
-- Fix broken import in `ai_editor.py`
-- Fix `_upsert_clips` missing `month_key`
-- Fix `job_finalize_month_end` missing `total_unique_voters`
-- Fix inconsistent leaderboard scoring
-- Remove dead imports
-- Convert `user_clip_history.py` to `Mapped` style
-- Replace `.dict()` with `.model_dump()`
-- Standardize `Optional[X]` and import ordering
-
-### Chunk 3: API Route Normalization
-- Standardize all router prefixes to `/api/v1/*`
-- Update `main.py` router mounting
-- Update Vite proxy config
-- Update `client.ts` to match new paths
-- Remove obsolete `createLeaderboardSocket`
-
-### Chunk 4: Security Hardening
-- Auth guards on admin endpoints (ADMIN role)
-- Auth guard on AI chat (authenticated user)
-- CORS restricted to `FRONTEND_URL`
-- Remove Giphy feature entirely
-- Remove JWT weak default — fail if `SECRET_KEY` missing
-- Convert `twitch_oauth.py` to async `httpx`
-- Optional WebSocket token auth
-
-### Chunk 5: Database Fresh Start
-- Delete all files in `alembic/versions/`
-- Drop `LeaderboardClipPerformance` model (unused)
-- Add `month_key` server default to `Clip`
-- Fix `alembic/env.py` env loading and URL default
-- Ensure all models use `Mapped` style
-- Generate single fresh consolidated migration
-
-### Chunk 6: Frontend Restructure
-- Add `react-router-dom` for page-based routing
-- Add ESLint to `devDependencies`
-- Create `pages/` directory with routed page components
-- Extract components from `App.tsx` god component
-- Remove Giphy UI code
-- Consolidate types in `types.ts`
-- Fix error handling (no silent `.catch`)
-- Remove verbose `console.log`
-
-### Chunk 7: Sync Verification + Finalization ✅ COMPLETE
-- Verified every frontend API call matches a backend route
-- Verified Pydantic schemas match TypeScript types
-- Fixed `client.ts` auth header guard — added `/ai-editor` and `/auth/twitch` paths
-- Fixed `client.ts` `getLeaderboard()` — now calls `/leaderboard/current` with correct return type
-- Fixed `auth.py` `/twitch/link` — now accepts JSON body via `TwitchLinkRequest` model
-- Fixed `ai_editor.py` — moved `DELETE /history/clear-all` before `DELETE /history/{history_id}`
-- Fixed `ClipHistoryResponse.updated_at` — now `Optional[datetime]` matching the nullable model column
-- Moved `pytest`, `pytest-asyncio`, `aiosqlite` from main deps to `[dependency-groups] dev`
-- Added `ruff` to dev dependencies; ran `uv run ruff check --fix` on all backend files
-- Ran `npx tsc --noEmit` and `npx eslint` — both pass with zero errors
-
+**Documentation updates (ongoing):** §5.4 describes following sync, For You, `ForYouChannelPicker` (Profile), `CombinedFeedSearch` (Swipe), and `followSearch`; §2 directory tree and §10 Key Decisions include portal/merge/quote-query behavior.
 ---
 
 ## 10. Key Decisions (Locked)
@@ -458,6 +418,12 @@ This project is undergoing a full reset. Work proceeds in 7 sequential chunks.
 | Sync HTTP calls | Replaced with `httpx` async | Never block the event loop |
 | FastAPI route order | Static paths before dynamic `{param}` segments | Prevents path shadowing (e.g. `/clear-all` vs `/{id}`) |
 | Auth guard list | `requiresAuth` in `client.ts` — include every authenticated prefix | Forgetting a prefix silently drops the JWT header |
+| Twitch follows on login | `sync_twitch_follows_for_user` after OAuth callback + `POST /following/sync` | DB `user_streamers` reflects Twitch follows without a separate manual step |
+| For You picker UI | `ForYouChannelPicker` + `createPortal` to `document.body` | Dropdown must not be clipped by swipe / overflow parents |
+| For You + new follows | Merge via fresh `GET /following` before `PUT /following/for-you` | Avoids stale React state after `POST /following` |
+| Helix channel search URL | `quote(query)` in `twitch_oauth.search_channels` | Valid requests for multi-word and special-character queries |
+| Swipe feed clips | Twitch-by-game queues only + `exclude_clip_ids` / voted IDs | Game tabs must not fall back to untagged DB “top clips”; repeats excluded via votes + guest param |
+| Swipe feed picker UI | `CombinedFeedSearch`: portal lists feeds + Twitch/follow typeahead; no duplicate channel field | One search bar; Profile still uses `ForYouChannelPicker` |
 
 ---
 

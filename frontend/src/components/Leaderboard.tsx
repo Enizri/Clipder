@@ -177,7 +177,13 @@ const LeaderboardRow: React.FC<LeaderboardRowProps> = ({ clip, onOpenComments })
                                 'https://via.placeholder.com/140x79?text=Thumbnail';
                         }}
                     />
-                    <video ref={videoRef} onEnded={() => setIsPlaying(false)} />
+                    <video
+                        ref={videoRef}
+                        className={isPlaying ? 'playing' : ''}
+                        playsInline
+                        onEnded={() => setIsPlaying(false)}
+                        onPlaying={() => setIsPlaying(true)}
+                    />
 
                     <div className="mini-controls">
                         <button

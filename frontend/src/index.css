@@ -778,6 +778,109 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
 .streamer-picker-select:focus { outline: none; border-color: rgba(236, 72, 153, 0.55); box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2); }
 .streamer-picker-hint { font-size: 0.82rem; color: #7a738f; margin-top: 8px; line-height: 1.4; }
 
+/* Merged swipe feed picker: search + category rows (replaces separate hamburger menu) */
+.feed-search-label { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.feed-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(0, 0, 0, 0.25);
+    color: #eee;
+    font-size: 0.9rem;
+}
+.feed-search-input:focus {
+    outline: none;
+    border-color: rgba(236, 72, 153, 0.55);
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+.feed-search-input::placeholder { color: #6b6578; }
+.feed-categories-panel {
+    max-height: 320px;
+    overflow-y: auto;
+    margin-top: 4px;
+    padding-right: 4px;
+}
+.feed-categories-panel .categories-list { padding: 8px 0 4px; }
+.feed-categories-panel .category-item { animation: slideInLeft 0.25s cubic-bezier(0.23, 1, 0.320, 1) backwards; }
+
+/* Unified swipe search: feeds + channels (portal panel reuses for-you-picker-* ) */
+.combined-feed-search-wrap {
+    margin-top: 6px;
+    position: relative;
+    z-index: 85;
+}
+.combined-feed-label { margin-top: 0; }
+.combined-feed-input {
+    border: 1px solid rgba(139, 92, 246, 0.38);
+    background: linear-gradient(180deg, rgba(22, 18, 34, 0.92), rgba(12, 10, 20, 0.96));
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.28);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+}
+.combined-feed-input:hover:not(:focus) {
+    border-color: rgba(139, 92, 246, 0.5);
+}
+.combined-feed-input:focus {
+    transform: translateY(-1px);
+}
+.combined-feed-inner {
+    max-height: min(72vh, 420px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 14px;
+    scrollbar-width: thin;
+}
+.combined-feed-feed-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    text-align: left;
+    padding: 11px 12px;
+    margin: 0;
+    border: none;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    color: #ddd;
+    font-size: 0.88rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.18s ease, transform 0.12s ease;
+}
+.combined-feed-feed-row:hover {
+    background: rgba(139, 92, 246, 0.18);
+    color: #fff;
+}
+.combined-feed-feed-row.is-current {
+    background: rgba(139, 92, 246, 0.15);
+    border: 1px solid rgba(236, 72, 153, 0.35);
+}
+.combined-feed-current-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #c4b5fd;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(139, 92, 246, 0.35);
+}
+.combined-feed-empty {
+    margin: 6px 0 10px;
+    padding: 0 4px;
+}
+.combined-feed-hint {
+    font-size: 0.78rem;
+    margin: 10px 0 0;
+    opacity: 0.88;
+}
+.for-you-toolbar-compact {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 12px;
+}
 /* For You: search + multi-select follows */
 .for-you-panel { margin-top: 10px; }
 .for-you-toolbar { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }

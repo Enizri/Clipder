@@ -70,16 +70,28 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onUserUpdate: _o
     }
   };
 
-  const persistForYouIds = async (ids: string[]) => {
+  /**
+   * `silent` = per-row checkbox: optimistic UI, no full-list lock or loading spinner.
+   * `blocking` = bulk actions (e.g. For You: all) — disables toolbar while saving.
+   */
+  const persistForYouIds = async (ids: string[], mode: 'silent' | 'blocking' = 'silent') => {
     if (!user) return;
-    setForYouSaving(true);
+    const idSet = new Set(ids);
+    if (mode === 'silent') {
+      setStreamers((prev) =>
+        prev.map((row) => ({ ...row, include_in_for_you: idSet.has(row.streamer_id) })),
+      );
+    } else {
+      setForYouSaving(true);
+    }
     try {
       await api.setForYouStreamers(ids);
-      await loadFollowing();
+      await refreshFollowingQuiet();
     } catch (err) {
       if (isViteDev()) console.warn('For You preferences failed', err);
+      await refreshFollowingQuiet();
     } finally {
-      setForYouSaving(false);
+      if (mode === 'blocking') setForYouSaving(false);
     }
   };
 
@@ -193,7 +205,12 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onUserUpdate: _o
                   type="button"
                   className="for-you-select-all"
                   disabled={forYouSaving || streamers.length === 0}
-                  onClick={() => void persistForYouIds(streamers.map((s) => s.streamer_id))}
+                  onClick={() =>
+                    void persistForYouIds(
+                      streamers.map((s) => s.streamer_id),
+                      'blocking',
+                    )
+                  }
                 >
                   For You: all
                 </button>
@@ -218,7 +235,6 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onUserUpdate: _o
                         <input
                           type="checkbox"
                           checked={s.include_in_for_you}
-                          disabled={forYouSaving}
                           onChange={(e) => {
                             const checked = e.target.checked;
                             const base = new Set(
@@ -226,7 +242,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({ user, onUserUpdate: _o
                             );
                             if (checked) base.add(s.streamer_id);
                             else base.delete(s.streamer_id);
-                            void persistForYouIds([...base]);
+                            void persistForYouIds([...base], 'silent');
                           }}
                         />
                         <span>{s.streamer_name}</span>

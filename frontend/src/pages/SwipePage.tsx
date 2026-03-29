@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, useTransition, useDeferredValue } from 'react';
 import { api } from '../api/client';
 import { ClipPreview } from '../components/ClipPreview';
-import { ForYouChannelPicker } from '../components/ForYouChannelPicker';
+import { CombinedFeedSearch } from '../components/CombinedFeedSearch';
 import { TwitchAuthWall } from '../components/TwitchAuthWall';
 import { videoUrlCache } from '../utils/videoCache';
 import { TheaterMode } from '../components/TheaterMode';
@@ -72,11 +72,11 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
   const [followedStreamers, setFollowedStreamers] = useState<Streamer[]>([]);
   /** Twitch game name for My Streamers (explore) mode. */
   const [exploreGame, setExploreGame] = useState<string>('');
-  const [forYouSearch, setForYouSearch] = useState('');
   const [forYouPrefsVersion, setForYouPrefsVersion] = useState(0);
   const [forYouSaving, setForYouSaving] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [showCategoriesMenu, setShowCategoriesMenu] = useState(false);
+  const [feedSearch, setFeedSearch] = useState('');
+  const [, startFeedTransition] = useTransition();
   const [rejectHighlight, setRejectHighlight] = useState(false);
   const [acceptHighlight, setAcceptHighlight] = useState(false);
   const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
@@ -85,6 +85,8 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
   const [theaterLoading, setTheaterLoading] = useState(false);
 
   const cardRef = useRef<HTMLDivElement>(null);
+  /** Tracks feed identity (category + explore game) to avoid full-page loading on For You checkbox-only saves. */
+  const prevClipOptsKeyRef = useRef<string | null>(null);
   const isDragging = useRef(false);
   const startX = useRef(0);
   const currentX = useRef(0);
@@ -139,9 +141,21 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
     return { category: currentCategory };
   }, [currentCategory, exploreGame]);
 
-  const persistForYouIds = async (ids: string[]) => {
+  /**
+   * Persist For You checkbox set. Use `silent: true` for single toggles so the list stays
+   * interactive and the swipe stack does not show the full loading screen.
+   */
+  const persistForYouIds = async (ids: string[], opts?: { silent?: boolean }) => {
     if (!user) return;
-    setForYouSaving(true);
+    const silent = Boolean(opts?.silent);
+    const idSet = new Set(ids);
+    if (silent) {
+      setFollowedStreamers((prev) =>
+        prev.map((row) => ({ ...row, include_in_for_you: idSet.has(row.streamer_id) })),
+      );
+    } else {
+      setForYouSaving(true);
+    }
     try {
       await api.setForYouStreamers(ids);
       const rows = await api.getFollowing();
@@ -149,8 +163,14 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
       setForYouPrefsVersion((v) => v + 1);
     } catch (err) {
       if (isViteDev()) console.warn('For You preferences failed', err);
+      try {
+        const rows = await api.getFollowing();
+        setFollowedStreamers(Array.isArray(rows) ? rows : []);
+      } catch {
+        /* leave optimistic state if refresh fails */
+      }
     } finally {
-      setForYouSaving(false);
+      if (!silent) setForYouSaving(false);
     }
   };
 
@@ -179,40 +199,85 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
     setFollowedStreamers(Array.isArray(rows) ? rows : []);
   };
 
-  const forYouFiltered = useMemo(
-    () => filterFollowedStreamersByPrefix(followedStreamers, forYouSearch),
-    [followedStreamers, forYouSearch],
-  );
-
-  useEffect(() => {
-    setLoading(true);
-    api
-      .getClips(clipRequestOpts)
-      .then((data) => {
-        if (!data?.clips || !Array.isArray(data.clips)) {
-          setClips([]);
-          return;
-        }
-        setClips(data.clips);
-        setCurrentIndex(0);
-      })
-      .catch((err) => {
-        if (isViteDev()) console.warn('getClips failed', err);
-        setClips([]);
-      })
-      .finally(() => setLoading(false));
-  }, [clipRequestOpts, forYouPrefsVersion]);
-
-  // ---------------------------------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------------------------------
-
   const stopAllVideos = useCallback(() => {
     document.querySelectorAll<HTMLVideoElement>('.clip-preview video').forEach((v) => {
       v.pause();
       v.currentTime = 0;
     });
   }, []);
+
+  const deferredFeedSearch = useDeferredValue(feedSearch);
+  const filteredFeedCategories = useMemo(() => {
+    const q = normalizeFollowSearchQuery(deferredFeedSearch);
+    if (!q) return categories;
+    return categories.filter((c) => c.toLowerCase().includes(q));
+  }, [categories, deferredFeedSearch]);
+
+  const forYouFiltered = useMemo(
+    () => filterFollowedStreamersByPrefix(followedStreamers, deferredFeedSearch),
+    [followedStreamers, deferredFeedSearch],
+  );
+
+  const handleSelectFeedFromSearch = useCallback(
+    (feedName: string) => {
+      if (feedName === currentCategory) return;
+      stopAllVideos();
+      startFeedTransition(() => {
+        setClips([]);
+        setCurrentIndex(0);
+        setCurrentCategory(feedName);
+      });
+    },
+    [currentCategory, stopAllVideos, startFeedTransition],
+  );
+
+  useEffect(() => {
+    const optsKey = JSON.stringify(clipRequestOpts);
+    const isFirst = prevClipOptsKeyRef.current === null;
+    const categoryOrExploreChanged = isFirst || prevClipOptsKeyRef.current !== optsKey;
+    prevClipOptsKeyRef.current = optsKey;
+
+    if (categoryOrExploreChanged) {
+      setLoading(true);
+    }
+
+    const excludeClipIds = [...getSeenClipIds()];
+    let cancelled = false;
+    api
+      .getClips({ ...clipRequestOpts, excludeClipIds })
+      .then((data) => {
+        if (cancelled) return;
+        const apply = () => {
+          if (!data?.clips || !Array.isArray(data.clips)) {
+            setClips([]);
+            return;
+          }
+          setClips(data.clips);
+          setCurrentIndex(0);
+        };
+        if (categoryOrExploreChanged) {
+          apply();
+        } else {
+          startFeedTransition(apply);
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (isViteDev()) console.warn('getClips failed', err);
+        setClips([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clipRequestOpts, forYouPrefsVersion]);
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
 
   const formatViews = (views: number) =>
     views >= 1000 ? `${(views / 1000).toFixed(1)}K` : String(views);
@@ -279,7 +344,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
         const newIndex = currentIndex + 1;
         if (newIndex >= clips.length - 2) {
           api
-            .getClips(clipRequestOpts)
+            .getClips({ ...clipRequestOpts, excludeClipIds: [...getSeenClipIds()] })
             .then((data) => {
               const seenIds = getSeenClipIds();
               const fresh = data.clips.filter((c) => !seenIds.has(c.id));
@@ -310,7 +375,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
     const target = e.target as HTMLElement;
     if (
       target.closest(
-        '.volume-control, .fullscreen-btn, .play-pause-btn, .progress-container, .clip-info, button, .for-you-panel, .streamer-picker'
+        '.volume-control, .fullscreen-btn, .play-pause-btn, .progress-container, .clip-info, button, .for-you-panel, .streamer-picker, .combined-feed-search-wrap'
       )
     )
       return;
@@ -429,6 +494,22 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
               <h4>Currently viewing</h4>
               <p className="current-category-label">{currentCategory}</p>
 
+              <CombinedFeedSearch
+                value={feedSearch}
+                onChange={setFeedSearch}
+                filteredFeeds={filteredFeedCategories}
+                currentFeed={currentCategory}
+                onSelectFeed={handleSelectFeedFromSearch}
+                user={user}
+                streamers={followedStreamers}
+                onMergeForYou={mergeForYouInclude}
+                onRefreshFollowing={refreshFollowingOnly}
+                mergeBusy={forYouSaving}
+              />
+              <p className="streamer-picker-hint combined-feed-hint">
+                Open the search box to switch feeds or {user ? 'add channels to your list.' : 'browse game tabs.'}
+              </p>
+
               {currentCategory === 'My Streamers' && gameCategories.length > 0 && (
                 <label className="streamer-picker">
                   <span className="streamer-picker-label">Explore category</span>
@@ -437,9 +518,11 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
                     value={exploreGame}
                     onChange={(e) => {
                       stopAllVideos();
-                      setClips([]);
-                      setCurrentIndex(0);
-                      setExploreGame(e.target.value);
+                      startFeedTransition(() => {
+                        setClips([]);
+                        setCurrentIndex(0);
+                        setExploreGame(e.target.value);
+                      });
                     }}
                   >
                     {gameCategories.map((g) => (
@@ -458,36 +541,30 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
                   )}
                   {user && (
                     <>
-                      <div className="for-you-toolbar">
-                        <ForYouChannelPicker
-                          value={forYouSearch}
-                          onChange={setForYouSearch}
-                          streamers={followedStreamers}
-                          onMergeForYou={mergeForYouInclude}
-                          onRefreshFollowing={refreshFollowingOnly}
-                          busy={forYouSaving}
-                          placeholder="Type to add channels to For You…"
-                          ariaLabel="Search followed channels and Twitch"
-                        />
+                      <div className="for-you-toolbar for-you-toolbar-compact">
                         <button
                           type="button"
                           className="for-you-select-all"
                           disabled={forYouSaving || followedStreamers.length === 0}
-                          onClick={() => void persistForYouIds(followedStreamers.map((s) => s.streamer_id))}
+                          onClick={() =>
+                            void persistForYouIds(followedStreamers.map((s) => s.streamer_id))
+                          }
                         >
-                          Select all
+                          Select all for For You
                         </button>
                       </div>
-                      {forYouSaving && <p className="for-you-saving">Updating…</p>}
+                      {forYouSaving && <p className="for-you-saving">Saving selection…</p>}
                       {followedStreamers.length === 0 && (
                         <p className="streamer-picker-hint">
-                          Search above to add Twitch channels (saved to your account) or sync follows from Profile.
+                          Use the search box to find Twitch channels, or sync follows from Profile.
                         </p>
                       )}
                       {followedStreamers.length > 0 && (
                         <>
-                          {forYouFiltered.length === 0 && normalizeFollowSearchQuery(forYouSearch).length > 0 && (
-                            <p className="streamer-picker-hint">No follows match that filter — use the search dropdown or clear the field.</p>
+                          {forYouFiltered.length === 0 && normalizeFollowSearchQuery(feedSearch).length > 0 && (
+                            <p className="streamer-picker-hint">
+                              No channels match the current search filter — clear the search or pick a name from the dropdown.
+                            </p>
                           )}
                           <ul className="for-you-list" aria-label="For You streamers">
                             {forYouFiltered.map((s) => (
@@ -496,7 +573,6 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
                                   <input
                                     type="checkbox"
                                     checked={s.include_in_for_you}
-                                    disabled={forYouSaving}
                                     onChange={(e) => {
                                       const checked = e.target.checked;
                                       const base = new Set(
@@ -506,7 +582,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
                                       );
                                       if (checked) base.add(s.streamer_id);
                                       else base.delete(s.streamer_id);
-                                      void persistForYouIds([...base]);
+                                      void persistForYouIds([...base], { silent: true });
                                     }}
                                   />
                                   <span>{s.streamer_name}</span>
@@ -520,36 +596,6 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
                   )}
                 </div>
               )}
-            </div>
-
-            <button
-              className={`categories-toggle ${showCategoriesMenu ? 'open' : ''}`}
-              onClick={() => setShowCategoriesMenu((s) => !s)}
-              title="Browse categories"
-            >
-              <span>All Categories</span>
-              <span className="hamburger-icon">☰</span>
-            </button>
-
-            <div className={`categories-dropdown ${showCategoriesMenu ? 'open' : ''}`}>
-              <div className="categories-list">
-                {categories.map((cat) => (
-                  <button
-                    key={cat}
-                    className={`category-item ${currentCategory === cat ? 'active' : ''}`}
-                    onClick={() => {
-                      if (cat === currentCategory) return;
-                      stopAllVideos();
-                      setClips([]);
-                      setCurrentIndex(0);
-                      setCurrentCategory(cat);
-                      setShowCategoriesMenu(false);
-                    }}
-                  >
-                    {cat}
-                  </button>
-                ))}
-              </div>
             </div>
           </div>
 

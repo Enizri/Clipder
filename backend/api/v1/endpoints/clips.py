@@ -1,8 +1,7 @@
 import asyncio
 import hashlib
 import logging
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 import httpx
@@ -14,7 +13,7 @@ from backend.core.state import AppState, get_state
 from backend.core.database import get_db
 from backend.core.config import get_settings
 from backend.api.v1.deps import get_current_user_optional
-from backend.models import Clip, User, UserStreamer
+from backend.models import Clip, User, UserStreamer, Vote
 from backend.schemas.clip import (
     ClipResponse,
     ClipsResponse,
@@ -379,24 +378,50 @@ def _default_explore_game_name() -> str:
     return parts[0] if parts else "Just Chatting"
 
 
-async def _background_refresh(
-    fetch_category: str,
-    *,
-    storage_key: str,
-    channel_names: Optional[List[str]] = None,
-    shuffle_queue: bool = False,
-) -> None:
-    """Fetch fresh clips from Twitch in the background so the next request is fast."""
-    try:
-        state = await asyncio.wait_for(AppState.get_instance(), timeout=60.0)
-        await state.fetch_clips(
-            fetch_category,
-            cache_key=storage_key,
-            channel_names=channel_names,
-            shuffle_queue=shuffle_queue,
-        )
-    except Exception as exc:
-        _clips_logger.debug("Background Twitch refresh failed: %s", exc)
+def _parse_exclude_clip_ids_param(raw: Optional[str]) -> Set[str]:
+    """Twitch clip IDs from query string (guest seen-list). Capped so URLs stay bounded."""
+    if not raw or not raw.strip():
+        return set()
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    return set(parts[:300])
+
+
+async def _user_voted_twitch_ids(db: AsyncSession, user_id: int) -> Set[str]:
+    """All Twitch IDs the user already liked/disliked — feed should not repeat them."""
+    result = await db.execute(
+        select(Clip.twitch_clip_id)
+        .join(Vote, Vote.clip_id == Clip.id)
+        .where(Vote.user_id == user_id)
+    )
+    return {str(row[0]) for row in result.all() if row[0]}
+
+
+def _filter_twitch_queue_dicts(
+    queue: List[Dict[str, Any]], exclude: Set[str]
+) -> List[Dict[str, Any]]:
+    if not exclude:
+        return list(queue)
+    return [c for c in queue if str(c.get("id") or "") not in exclude]
+
+
+def _clip_dicts_for_foryou_channels(
+    clips: List[Dict[str, Any]],
+    allowed_channel_logins: Optional[List[str]],
+) -> List[Dict[str, Any]]:
+    """
+    For You feed only (`allowed_channel_logins` set): keep clips whose `channel` login
+    matches a selected streamer (case-insensitive). Stale cache rows from other channels drop out.
+    """
+    if allowed_channel_logins is None:
+        return clips
+    allow = {str(c).strip().lower() for c in allowed_channel_logins if str(c).strip()}
+    if not allow:
+        return []
+    return [
+        c
+        for c in clips
+        if str(c.get("channel") or "").strip().lower() in allow
+    ]
 
 
 @router.get("/clips", response_model=ClipsResponse)
@@ -406,23 +431,34 @@ async def get_clips(
         None,
         description='When category is "My Streamers", Twitch game name to explore (e.g. Valorant).',
     ),
+    exclude_clip_ids: Optional[str] = Query(
+        None,
+        description="Comma-separated Twitch clip IDs to omit (guest seen list; merged with "
+        "this user's votes when JWT present).",
+    ),
     current_user: Optional[User] = Depends(get_current_user_optional),
     db: AsyncSession = Depends(get_db),
 ) -> ClipsResponse:
     """
-    Serve clips with a DB-first strategy so the endpoint is never blocked by Twitch API latency.
+    Serve clips from the in-memory Twitch queue (per-feed cache key).
 
     - **For You**: clips only from followed channels where `include_in_for_you` is true (JWT
       required; guests get an empty list).
-    - **My Streamers**: explore feed — random-ish ordering of clips from a Twitch **game**
-      (`explore_category`, default: first game in `TWITCH_CATEGORIES`).
-    - Any other `category` value is treated as a game name (same explore behavior).
+    - **My Streamers**: explore feed — clips for a Twitch **game** (`explore_category`).
+    - Any other `category` value is a game tab (e.g. Valorant) — same Twitch-by-game behavior.
+
+    Rows in Postgres are not tagged by game, so we do **not** fall back to generic top clips when
+    the game queue is cold (that caused wrong-category results). Exclusions keep swiped clips
+    from reappearing for guests (`exclude_clip_ids`) and logged-in users (vote history).
     """
+    exclude_set = _parse_exclude_clip_ids_param(exclude_clip_ids)
+    if current_user is not None:
+        exclude_set = exclude_set | await _user_voted_twitch_ids(db, current_user.id)
+
     storage_key: str = category
     channel_names_override: Optional[List[str]] = None
     fetch_category: str = category
     shuffle_explore: bool = False
-    skip_db_fallback: bool = False
 
     uid_part = str(current_user.id) if current_user is not None else "0"
 
@@ -443,7 +479,6 @@ async def get_clips(
         h = hashlib.sha256(id_fingerprint.encode()).hexdigest()[:16]
         storage_key = f"__foryou_u{current_user.id}_{h}__"
         fetch_category = "For You"
-        skip_db_fallback = True
 
     elif category == "My Streamers":
         game = (
@@ -461,71 +496,38 @@ async def get_clips(
         shuffle_explore = True
         storage_key = f"__explore_tab_{category}_u{uid_part}__"
 
-    # --- Fast path: AppState already has a warm cache for this feed key ---
+    # --- Fast path: warm cache for this feed key ---
     if AppState._instance is not None:
-        queue = AppState._instance.category_queues.get(storage_key)
-        if queue:
-            state = AppState._instance
-            twitch_ids = [str(c["id"]) for c in queue if c.get("id") is not None]
-            likes_map: Dict[str, int] = {}
-            if twitch_ids:
-                likes_rows = await db.execute(
-                    select(Clip.twitch_clip_id, Clip.monthly_likes).where(
-                        Clip.twitch_clip_id.in_(twitch_ids)
+        queue_raw = AppState._instance.category_queues.get(storage_key)
+        if queue_raw:
+            filtered = _filter_twitch_queue_dicts(queue_raw, exclude_set)
+            filtered = _clip_dicts_for_foryou_channels(filtered, channel_names_override)
+            if filtered:
+                state = AppState._instance
+                twitch_ids = [str(c["id"]) for c in filtered if c.get("id") is not None]
+                likes_map: Dict[str, int] = {}
+                if twitch_ids:
+                    likes_rows = await db.execute(
+                        select(Clip.twitch_clip_id, Clip.monthly_likes).where(
+                            Clip.twitch_clip_id.in_(twitch_ids)
+                        )
                     )
+                    likes_map = {
+                        str(row[0]): int(row[1] or 0) for row in likes_rows.all()
+                    }
+                for clip in filtered:
+                    tid = str(clip.get("id") or "")
+                    clip["local_likes"] = likes_map.get(tid, 0)
+                    clip["comment_count"] = len(state.clip_comments.get(clip["id"], []))
+                return ClipsResponse(
+                    clips=[ClipResponse.model_validate(c) for c in filtered],
+                    total=len(filtered),
                 )
-                likes_map = {
-                    str(row[0]): int(row[1] or 0) for row in likes_rows.all()
-                }
-            for clip in queue:
-                tid = str(clip.get("id") or "")
-                clip["local_likes"] = likes_map.get(tid, 0)
-                clip["comment_count"] = len(state.clip_comments.get(clip["id"], []))
-            return ClipsResponse(
-                clips=[ClipResponse.model_validate(c) for c in queue],
-                total=len(queue),
-            )
+            # Cache unusable (all excluded or wrong channels for For You) — refetch
+            AppState._instance.category_queues.pop(storage_key, None)
 
-    # --- DB fallback: engagement-ranked clips (skip for "For You" — unrelated channels) ---
-    db_clips: List[Clip] = []
-    if not skip_db_fallback:
-        current_month = datetime.now(timezone.utc).strftime("%Y-%m")
-        score_order = (
-            (Clip.monthly_likes - Clip.monthly_dislikes).desc(),
-            Clip.monthly_likes.desc(),
-            Clip.view_count.desc(),
-            Clip.created_at.desc(),
-        )
-        result = await db.execute(
-            select(Clip)
-            .where(Clip.month_key == current_month)
-            .order_by(*score_order)
-            .limit(30)
-        )
-        db_clips = list(result.scalars().all())
-
-        if not db_clips:
-            result = await db.execute(select(Clip).order_by(*score_order).limit(30))
-            db_clips = list(result.scalars().all())
-
-    if db_clips:
-        asyncio.create_task(
-            _background_refresh(
-                fetch_category,
-                storage_key=storage_key,
-                channel_names=channel_names_override,
-                shuffle_queue=shuffle_explore,
-            )
-        )
-        return ClipsResponse(
-            clips=[_db_clip_to_response(c) for c in db_clips],
-            total=len(db_clips),
-        )
-
-    # --- Last resort: DB is empty (first ever run) — wait for Twitch (bounded) ---
-    _clips_logger.info(
-        "DB empty — waiting for Twitch fetch (feed=%s)", fetch_category
-    )
+    # --- Twitch fetch (cold cache or invalidated) ---
+    _clips_logger.info("Fetching Twitch clips (feed=%s, key=%s)", fetch_category, storage_key)
     try:
         state = await asyncio.wait_for(AppState.get_instance(), timeout=5.0)
         clips = await asyncio.wait_for(
@@ -538,15 +540,17 @@ async def get_clips(
             timeout=25.0,
         )
     except asyncio.TimeoutError:
-        _clips_logger.warning("Timed out waiting for initial Twitch fetch")
+        _clips_logger.warning("Timed out waiting for Twitch fetch")
         clips = []
     except Exception as exc:
-        _clips_logger.warning("Initial Twitch fetch failed: %s", exc)
+        _clips_logger.warning("Twitch fetch failed: %s", exc)
         clips = []
 
+    filtered_out = _filter_twitch_queue_dicts(clips, exclude_set)
+    filtered_out = _clip_dicts_for_foryou_channels(filtered_out, channel_names_override)
     return ClipsResponse(
-        clips=[ClipResponse.model_validate(c) for c in clips],
-        total=len(clips),
+        clips=[ClipResponse.model_validate(c) for c in filtered_out],
+        total=len(filtered_out),
     )
 
 

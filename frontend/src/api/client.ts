@@ -108,10 +108,14 @@ export const api = {
   getClips: (opts?: {
     category?: string;
     exploreCategory?: string | null;
+    /** Twitch clip IDs already swiped (guest) — merged server-side with vote history when logged in */
+    excludeClipIds?: string[];
   }): Promise<ClipsResponse> => {
     const category = opts?.category ?? 'My Streamers';
     const params = new URLSearchParams({ category });
     if (opts?.exploreCategory) params.set('explore_category', opts.exploreCategory);
+    const ex = opts?.excludeClipIds?.filter(Boolean) ?? [];
+    if (ex.length > 0) params.set('exclude_clip_ids', ex.slice(0, 300).join(','));
     return fetchJson<ClipsResponse>(`/clips?${params.toString()}`);
   },
 

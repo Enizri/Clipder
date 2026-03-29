@@ -54,7 +54,6 @@ const Header: React.FC<HeaderProps> = ({ user, onShowAuth, onLogout }) => {
       <div className="auth-section">
         {user ? (
           <div className="user-menu">
-            <span>{user.username}</span>
             {(user.role === 'PRO' || user.role === 'ADMIN') && (
               <span className="pro-badge">
                 <span className="pro-badge-text">👑</span>
