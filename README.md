@@ -1,38 +1,54 @@
 # Clipder
 
-Twitch clip discovery: swipe to vote, rank a live monthly leaderboard, then
-send liked clips through Groq (transcript + score) and queue them for
-YouTube Shorts and TikTok.
+Clipder is a Twitch clip discovery and curation app. Browse moments from your
+favorite streamers and game categories, swipe to vote, and save the clips you
+want to work with. A monthly leaderboard tracks community favorites, while the
+Playground helps you review saved clips and prepare titles and descriptions
+for YouTube Shorts and TikTok.
 
-![Demo: swipe a Twitch clip, open the queue, analyze, upload to YouTube Shorts and TikTok](docs/screenshots/clipder-demo.gif)
+![Clipder demo: swipe a Twitch clip, open the Playground queue, analyze, and mark it for export](docs/screenshots/clipder-demo.gif)
 
 ![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.135+-green.svg)
 ![React](https://img.shields.io/badge/React-18-61dafb.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue.svg)
 
-**Repo:** [github.com/Enizri/Clipder](https://github.com/Enizri/Clipder)
+## The clip workflow
 
-### Resume (two lines)
+1. **Discover** — Browse Twitch clips by category or choose followed channels for your For You feed.
+2. **Watch and vote** — Preview a clip, open theater mode, and swipe right to like it or left to pass. Sign in with Twitch to save votes and liked clips.
+3. **Review your queue** — Open the Playground to revisit saved clips and select one for analysis or chat.
+4. **Prepare a post** — Generate a recap, a suggested score, and a title and description using Groq.
+5. **Mark for export** — Record a clip for YouTube Shorts and TikTok in your queue.
 
-Clipder — FastAPI + React app for Twitch clip discovery: swipe to vote, live monthly leaderboard, and a playground that transcribes liked clips with Groq then queues YouTube Shorts and TikTok.
-https://github.com/Enizri/Clipder
+## Current functionality
 
-YouTube / TikTok **publish** is a queued export (live adapters are stubs). The
-playground still runs Groq analysis when `GROQ_API_KEY` is set.
+- **Clip discovery** — Swipe feed, category search, followed-channel selection, video previews, and theater mode.
+- **Community ranking** — Monthly leaderboard with WebSocket updates, historical rankings, and analytics dashboards.
+- **Clip discussion** — Comments with Twitch emote support.
+- **Personal queue** — Saved clip history, Playground analysis, and AI chat.
+- **Accounts** — Twitch OAuth sign-in and followed-channel sync.
+- **Administration** — Separate admin-only queue and processing endpoints.
 
-## Features
+### AI and export status
 
-- **Swipe & Vote** — card-swipe interface for discovering Twitch clips
-- **Playground** — swipe right to queue a clip, run Groq analysis (transcript / score / title), then queue YouTube Shorts + TikTok
-- **Demo mode** — `http://localhost:3000/?demo=1` walks that flow on public Twitch clips (no login)
-- **Video Preview** — Hover-to-preview with volume controls
-- **Theater Mode** — Full-screen viewing experience
-- **Comments** — Real-time clip comments with Twitch emote support
-- **Leaderboard** — Monthly ranked clips with live WebSocket updates
-- **Analytics** — Visual dashboards with Recharts
-- **Admin Queue** — Admin-only process endpoints
-- **Twitch OAuth** — Link your Twitch account, sync followed channels
+The Playground currently sends the clip's title, channel, and existing
+description to Groq. Its `transcript` output is a generated recap based on that
+metadata, not a transcription of the clip's audio. If the Groq key is missing
+or the request fails, analysis falls back to generated sample content.
+
+YouTube Shorts and TikTok actions currently **record an export request**.
+Live publishing adapters are not connected; the UI's upload action does not
+publish a video to either platform.
+
+### Try the demo
+
+With the frontend running, open **http://localhost:3000/?demo=1** to try the
+swipe → queue → analyze → export flow without signing in. This walkthrough
+uses a fixed set of public Twitch clip references, a browser-session queue,
+and simulated analysis and export actions. Video playback requires fresh clip
+URLs; otherwise the demo shows thumbnails. The GIF above shows the recorded
+walkthrough.
 
 ## Tech Stack
 
@@ -53,7 +69,7 @@ playground still runs Groq analysis when `GROQ_API_KEY` is set.
 ## Prerequisites
 
 - **Python 3.12+**
-- **Node.js 18+** (with npm)
+- **Node.js 22+** (with npm; the locked frontend dependencies require Node 20 or newer)
 - **uv** — Python package manager ([install guide](https://docs.astral.sh/uv/getting-started/installation/))
 - **PostgreSQL** — local instance or hosted (e.g. Supabase)
 - **Twitch Developer App** — for API credentials ([dev.twitch.tv](https://dev.twitch.tv/console/apps))
@@ -75,7 +91,7 @@ cd Clipder
 cp .env.example .env
 ```
 
-Open `.env` and fill in your credentials. At minimum you need:
+Open `.env` and fill in your credentials and content settings:
 
 | Variable | Description |
 |----------|-------------|
@@ -85,17 +101,25 @@ Open `.env` and fill in your credentials. At minimum you need:
 | `TWITCH_CLIENT_SECRET` | From your Twitch Developer Console app |
 | `GROQ_API_KEY` | From [console.groq.com](https://console.groq.com) — used for AI transcription/chat |
 | `TWITCH_CHANNELS` | Comma-separated Twitch channel names to fetch clips from |
-| `TWITCH_CATEGORIES` | Comma-separated Twitch category names (e.g. `Just Chatting,VALORANT`) |
+| `TWITCH_CATEGORIES` | Optional category list (e.g. `Just Chatting,VALORANT`); the template provides a starting selection |
 
-See `.env.example` for the full list of optional variables.
+Set `TWITCH_REDIRECT_URI` to
+`http://localhost:3000/api/v1/auth/twitch/callback` for local development, and
+register that exact URL in your Twitch Developer Console app. The callback
+passes through the Vite proxy to the backend.
+
+See [.env.example](.env.example) for the configuration template. The core
+engine currently requires `GROQ_API_KEY` as well as Twitch credentials and at
+least one `TWITCH_CHANNELS` entry to initialize, even though Playground
+analysis has a fallback.
 
 ### 3. Install Python dependencies
 
 ```bash
-uv sync
+uv sync --locked
 ```
 
-This installs everything listed in `pyproject.toml` and locks versions in `uv.lock`.
+This installs the Python dependencies using the committed `uv.lock`.
 
 ### 4. Run database migrations
 
@@ -111,12 +135,11 @@ This creates all the tables (users, clips, votes, leaderboard, etc.).
 
 ```bash
 cd frontend
-npm install
+npm ci
 cd ..
 ```
 
-The `package-lock.json` is committed, so `npm install` will produce a
-deterministic, reproducible `node_modules`.
+`npm ci` installs the frontend dependencies from the committed `package-lock.json`.
 
 ### 6. Start the application
 
@@ -138,9 +161,7 @@ proxies `/api/*` and `/ws/*` requests to the backend at `localhost:8000`
 (configured in `vite.config.ts`). Open **http://localhost:3000** in your
 browser.
 
-Login-free product walkthrough (public Twitch clips, local queue only):
-
-**http://localhost:3000/?demo=1**
+Interactive API documentation is available at **http://localhost:8000/docs**.
 
 ---
 
@@ -153,8 +174,8 @@ Clipder/
 ├── uv.lock                    # Locked Python dependency versions
 ├── alembic.ini                # Migration config
 ├── .env.example               # Required env vars template
-├── CLAUDE.md                  # Project guide & conventions
-├── AGENTS.md                  # Agent behavioral rules
+├── CLAUDE.md                  # Points Claude Code to AGENTS.md
+├── AGENTS.md                  # Canonical coding-agent guidelines
 │
 ├── alembic/
 │   ├── env.py                 # Async migration runner
@@ -169,7 +190,7 @@ Clipder/
 │   │       ├── ai_chat.py     # /api/v1/ai/*
 │   │       ├── ai_editor.py   # /api/v1/ai-editor/*
 │   │       ├── auth.py        # /api/v1/auth/*
-│   │       ├── clips.py       # /api/v1/clips/*
+│   │       ├── clips.py       # /api/v1/clips, /clip/*, /categories, /emotes
 │   │       ├── following.py   # /api/v1/following/*
 │   │       ├── health.py      # /api/v1/health/*
 │   │       ├── leaderboard.py # /api/v1/leaderboard/*
@@ -204,7 +225,9 @@ Clipder/
 │       ├── components/        # Reusable UI components
 │       └── hooks/             # Custom React hooks
 │
-└── scripts/                   # DB maintenance & setup utilities
+├── docs/screenshots/          # README demo GIF
+├── tests/                     # Integration tests and manual checks
+└── scripts/                   # DB utilities and demo GIF recorder
 ```
 
 ---
@@ -213,17 +236,17 @@ Clipder/
 
 All routes live under `/api/v1/`. The backend exposes these router groups:
 
-| Router | Prefix | Auth |
+| Router | Routes | Auth |
 |--------|--------|------|
-| auth | `/api/v1/auth` | Public (Twitch OAuth), JWT (`/me`) |
-| clips | `/api/v1/clips` | Public |
-| votes | `/api/v1/votes` | JWT required |
-| leaderboard | `/api/v1/leaderboard` | Public |
-| following | `/api/v1/following` | JWT required |
-| admin | `/api/v1/admin` | JWT + ADMIN role |
-| ai_chat | `/api/v1/ai` | JWT required |
-| ai_editor | `/api/v1/ai-editor` | JWT required |
-| health | `/api/v1/health` | Public |
+| auth | `/api/v1/auth/*` | Public (Twitch OAuth), JWT (`/me`) |
+| clips | `/api/v1/clips`, `/api/v1/categories`, `/api/v1/clip/{clip_id}/*`, `/api/v1/emotes` | Public; optional JWT personalizes the feed |
+| votes | `/api/v1/votes/clip/{clip_id}/vote`, `/api/v1/votes/clip/{clip_id}/votes` | JWT to vote; public vote totals |
+| leaderboard | `/api/v1/leaderboard/*` | Public |
+| following | `/api/v1/following`, `/api/v1/following/*` | JWT required |
+| admin | `/api/v1/admin/*` | JWT + ADMIN role |
+| ai_chat | `/api/v1/ai/chat` | JWT required |
+| ai_editor | `/api/v1/ai-editor/history/*`, `/api/v1/ai-editor/history` | JWT required |
+| health | `/api/v1/health`, `/api/v1/health/*` | Public |
 
 **WebSocket:** `ws://localhost:8000/ws/leaderboard` — real-time leaderboard updates.
 
@@ -240,14 +263,14 @@ All routes live under `/api/v1/`. The backend exposes these router groups:
 | `GROQ_API_KEY` | **Yes** | — | Groq API key for AI features |
 | `GROQ_CHAT_MODEL` | No | `llama-3.3-70b-versatile` | Groq cloud chat model (playground). Not a local LLM. |
 | `TWITCH_CHANNELS` | **Yes** | — | Comma-separated channel names |
-| `TWITCH_CATEGORIES` | **Yes** | — | Comma-separated category names |
+| `TWITCH_CATEGORIES` | No | `Just Chatting,Grand Theft Auto V,VALORANT,League of Legends` | Comma-separated category names; `.env.example` supplies a shorter list |
 | `FRONTEND_URL` | No | `http://localhost:3000` | CORS allowed origin |
-| `TWITCH_REDIRECT_URI` | No | `http://localhost:8000/api/v1/auth/twitch/callback` | OAuth callback URL |
+| `TWITCH_REDIRECT_URI` | No | `http://localhost:3000/api/v1/auth/twitch/callback` | Must match the callback registered with Twitch |
 | `ALGORITHM` | No | `HS256` | JWT algorithm |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | No | `10080` | JWT TTL (7 days) |
 | `SUPABASE_URL` | No | — | Supabase project URL |
 | `SUPABASE_ANON_KEY` | No | — | Supabase anonymous key |
-| `OPUS_CLIP_API_KEY` | No | — | Opus Clip integration |
+| `OPUS_CLIP_API_KEY` | No | — | Optional core-engine configuration |
 
 The frontend has one optional variable in `frontend/.env`:
 
@@ -263,18 +286,22 @@ The frontend has one optional variable in `frontend/.env`:
 # Lint Python
 uv run ruff check .
 
-# Auto-fix Python lint
-uv run ruff check --fix .
-
-# Lint frontend
-cd frontend && npx eslint .
-
-# Type-check frontend
-cd frontend && npx tsc --noEmit
-
 # Run tests
 uv run pytest
 ```
+
+Run frontend checks from `frontend/`:
+
+```bash
+npm run lint
+npm run build
+```
+
+The build runs TypeScript checks before producing the Vite bundle.
+Database integration tests use `TEST_DATABASE_URL`, defaulting to
+`postgresql+asyncpg://postgres:password@localhost:5432/clipder_test`. Use a
+dedicated test database: the fixtures create and drop tables. Tests also load
+the application settings, including `SECRET_KEY`.
 
 ---
 
