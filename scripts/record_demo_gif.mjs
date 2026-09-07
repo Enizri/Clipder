@@ -34,7 +34,7 @@ const OUT_WIDTH = 896;
 const OUT_HEIGHT = 504;
 const FPS = 25;
 /** Playback speed multiplier applied when resampling the capture. See `densify`. */
-const SPEED = 1.15;
+const SPEED = 1.35;
 const PLAYWRIGHT_CACHE = path.join(os.homedir(), '.cache', 'clipder-playwright');
 
 /**
