@@ -11,6 +11,11 @@ import { DEMO_CLIPS, isDemoMode, pushDemoQueue } from '../demo/demoClips';
 
 const GUEST_SWIPE_LIMIT = 15;
 
+/** Card tilts toward the chosen side before it flies off, so a button press reads as a swipe. */
+const SWIPE_ARM_MS = 170;
+/** Fly-out duration. Kept long enough that the motion is legible at low frame rates. */
+const SWIPE_EXIT_MS = 460;
+
 const isViteDev = (): boolean =>
   Boolean((import.meta as { env?: { DEV?: boolean } }).env?.DEV);
 
@@ -313,14 +318,23 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
   // ---------------------------------------------------------------------------
 
   const handleSwipe = useCallback(
-    async (direction: 'left' | 'right') => {
+    async (direction: 'left' | 'right', opts?: { fromDrag?: boolean }) => {
       if (isSwiping.current) return;
       const currentClip = clips[currentIndex];
       if (!currentClip) return;
 
       isSwiping.current = true;
-      setLeavingDirection(direction);
       stopAllVideos();
+
+      // A drag already carried the card off-centre, so it flies out immediately.
+      // A button press first arms (tilt + hint) so the motion does not teleport.
+      const armMs = opts?.fromDrag ? 0 : SWIPE_ARM_MS;
+      if (armMs) {
+        setSwipeDirection(direction);
+        setTimeout(() => setLeavingDirection(direction), armMs);
+      } else {
+        setLeavingDirection(direction);
+      }
 
       setTimeout(() => {
         addSeenClipId(currentClip.id);
@@ -371,7 +385,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
         setLeavingDirection(null);
         setSwipeDirection(null);
         isSwiping.current = false;
-      }, 320);
+      }, armMs + SWIPE_EXIT_MS);
     },
     [clips, currentIndex, stopAllVideos, user, clipRequestOpts]
   );
@@ -451,20 +465,22 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
     setRejectHighlight(false);
     setAcceptHighlight(false);
 
-    ['left', 'right'].forEach((side) => {
-      const hint = cardRef.current?.querySelector(`.swipe-hint.${side}`) as HTMLElement | null;
-      if (hint) {
-        hint.style.opacity = '0';
-        hint.style.transform = 'scale(0.5)';
-      }
-    });
+    const released = Math.abs(deltaX) > 100;
 
-    if (Math.abs(deltaX) > 100) {
-      cardRef.current.classList.remove('top-card');
-      handleSwipe(deltaX > 0 ? 'right' : 'left');
-    } else {
+    // On a committed swipe the .swipe-out-* class keeps the hint up through the fly-out.
+    if (!released) {
+      ['left', 'right'].forEach((side) => {
+        const hint = cardRef.current?.querySelector(`.swipe-hint.${side}`) as HTMLElement | null;
+        if (hint) {
+          hint.style.opacity = '0';
+          hint.style.transform = 'scale(0.5)';
+        }
+      });
       cardRef.current.style.transform = '';
+      return;
     }
+
+    handleSwipe(deltaX > 0 ? 'right' : 'left', { fromDrag: true });
   }, [handleSwipe]);
 
   useEffect(() => {
@@ -643,28 +659,34 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
                 </div>
               ) : (
                 visibleClips.map((clip, idx) => {
+                  const hintSide = idx === 0 ? leavingDirection || swipeDirection : null;
                   let cardStyle: React.CSSProperties = {
                     zIndex: 100 - idx,
                     pointerEvents: idx === 0 ? 'auto' : 'none',
-                    transition: 'transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.28s',
+                    transition:
+                      'transform 0.42s cubic-bezier(0.34, 1.4, 0.64, 1), opacity 0.34s ease-out',
                   };
                   if (idx === 0 && leavingDirection) {
+                    const sign = leavingDirection === 'right' ? 1 : -1;
                     cardStyle = {
                       ...cardStyle,
-                      transform: `translate(${leavingDirection === 'right' ? '150%' : '-150%'}, -100px) rotate(${leavingDirection === 'right' ? 32 : -32}deg) scale(0.95)`,
+                      // Ease-out with a delayed fade: the card stays readable for most of its arc.
+                      transition: `transform ${SWIPE_EXIT_MS}ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity ${Math.round(SWIPE_EXIT_MS * 0.7)}ms ease-in ${Math.round(SWIPE_EXIT_MS * 0.3)}ms`,
+                      transform: `translate(${sign * 145}%, -60px) rotate(${sign * 22}deg) scale(0.94)`,
                       opacity: 0,
                     };
                   } else if (idx === 0 && swipeDirection) {
+                    const sign = swipeDirection === 'right' ? 1 : -1;
                     cardStyle = {
                       ...cardStyle,
-                      transform: `translate(${swipeDirection === 'right' ? '150%' : '-150%'}, -100px) rotate(${swipeDirection === 'right' ? 30 : -30}deg) scale(0.95)`,
-                      opacity: 0,
+                      transition: `transform ${SWIPE_ARM_MS}ms ease-out`,
+                      transform: `translate(${sign * 14}%, -8px) rotate(${sign * 5}deg)`,
                     };
                   } else if (idx > 0) {
                     cardStyle = {
                       ...cardStyle,
                       transform: `scale(${1 - idx * 0.03}) translateY(${idx * 10}px)`,
-                      opacity: 1 - idx * 0.12,
+                      opacity: 1 - idx * 0.08,
                     };
                   }
 
@@ -672,7 +694,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
                     <div
                       key={clip.id}
                       ref={idx === 0 ? cardRef : null}
-                      className={`clip-card ${idx === 0 ? 'top-card' : ''}`}
+                      className={`clip-card${idx === 0 ? ' top-card' : ''}${idx === 1 ? ' next-card' : ''}${hintSide ? ` swipe-out-${hintSide}` : ''}`}
                       style={cardStyle}
                       onMouseDown={idx === 0 ? handleMouseDown : undefined}
                       onTouchStart={idx === 0 ? handleMouseDown : undefined}

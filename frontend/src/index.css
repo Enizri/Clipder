@@ -257,7 +257,17 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
     backdrop-filter: blur(0.5px);
 }
 .clip-card.dragging { transition: none !important; cursor: grabbing; }
-.clip-card:not(.top-card) .blur-bg-container { display: none !important; }
+/* Only the top two cards keep the blurred backdrop: the next one fades in as it is promoted,
+   which avoids the hard brightness pop the old `display: none` caused. */
+.clip-card.next-card .blur-bg-container { opacity: 0; }
+.clip-card:not(.top-card):not(.next-card) .blur-bg-container { display: none !important; }
+/* Hold NOPE/LIKE on screen while the card flies out, including button-triggered swipes. */
+.clip-card.swipe-out-right .swipe-hint.right,
+.clip-card.swipe-out-left .swipe-hint.left {
+    opacity: 1 !important;
+    transform: scale(1.1) !important;
+    transition: opacity 0.16s ease-out, transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
 
 .clip-preview { 
     position: relative; width: 100%; aspect-ratio: 9/16; background: #000; border-radius: 20px; 
@@ -1460,25 +1470,199 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
     cursor: not-allowed;
 }
 
-.admin-queue-panel {
+/* ==============================================================================
+   PLAYGROUND (AI EDITOR) LAYOUT
+   ============================================================================== */
+
+/* 92px clears the fixed header so nothing renders underneath it. */
+#ai-editor.view-section.active {
+    padding: 92px 24px 24px;
+    align-items: stretch;
+    overflow: hidden;
+}
+
+.playground-layout {
+    display: flex;
+    gap: 18px;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    max-width: 1320px;
+    margin: 0 auto;
+}
+
+.playground-main {
     flex: 1;
     min-width: 0;
-    overflow: hidden;
-    padding-top: 280px;
+    min-height: 0;
     display: flex;
     flex-direction: column;
+}
+
+.playground-heading {
+    margin: 0 0 4px;
+    font-size: 1.35em;
+    font-weight: 800;
+}
+
+.playground-subtitle {
+    margin: 0 0 12px;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 0.85em;
+}
+
+.playground-status {
+    margin: 0 0 10px;
+    color: rgba(244, 114, 182, 0.9);
+    font-size: 0.8em;
+    min-height: 1.2em;
+}
+
+.playground-chat {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    flex: 1;
+    min-height: 0;
+    padding: 18px;
+    background: rgba(30, 30, 40, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 14px;
+}
+
+.playground-chat-log {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.22);
+    border-radius: 10px;
+    scrollbar-width: thin;
+}
+
+.playground-chat-log::-webkit-scrollbar {
+    width: 6px;
+}
+
+.playground-chat-log::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+}
+
+.playground-chat-empty {
+    margin: auto;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.45);
+    font-size: 0.92em;
+}
+
+.playground-msg {
+    display: flex;
+}
+
+.playground-msg.is-user {
+    justify-content: flex-end;
+}
+
+.playground-msg-bubble {
+    max-width: 76%;
+    padding: 11px 14px;
+    border-radius: 12px;
+    font-size: 0.88em;
+    line-height: 1.55;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(139, 92, 246, 0.18);
+}
+
+.playground-msg.is-user .playground-msg-bubble {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.35), rgba(236, 72, 153, 0.25));
+    border-color: rgba(236, 72, 153, 0.3);
+}
+
+.playground-msg-clip {
+    width: 260px;
+    border-radius: 12px;
     overflow: hidden;
+    border: 1px solid rgba(139, 92, 246, 0.28);
+    background: rgba(0, 0, 0, 0.4);
+}
+
+.playground-msg-clip img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+}
+
+.playground-msg-clip-caption {
+    padding: 8px 12px;
+    font-size: 0.8em;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.82);
+    background: rgba(30, 30, 40, 0.6);
+}
+
+.playground-chat-input-row {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* ==============================================================================
+   PLAYGROUND QUEUE RAIL
+   ============================================================================== */
+
+.queue-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 320px;
+    flex-shrink: 0;
+    min-height: 0;
+    padding: 16px;
+    background: rgba(30, 30, 40, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 14px;
+}
+
+.queue-panel-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.queue-panel-header h3 {
+    margin: 0;
+    color: #f472b6;
+    font-size: 0.95em;
+}
+
+.queue-panel-count {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.75em;
+    font-weight: 600;
 }
 
 .queue-list {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 0 0 12px 0;
+    gap: 12px;
+    padding: 2px 2px 6px;
     scrollbar-width: thin;
+    /* Soft bottom edge so a partly visible card reads as "scroll for more". */
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
 }
 
 .queue-list::-webkit-scrollbar {
@@ -1486,64 +1670,207 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
 }
 
 .queue-list::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.12);
     border-radius: 10px;
 }
 
-.queue-clip-item {
+.queue-empty {
+    margin: auto 0;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.85em;
+    padding: 32px 10px;
+}
+
+.queue-empty-icon {
+    font-size: 2em;
+    margin-bottom: 8px;
+}
+
+.queue-card {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    border-radius: 12px;
+    overflow: hidden;
+    background: rgba(16, 16, 24, 0.94);
+    border: 1px solid rgba(236, 72, 153, 0.28);
+    cursor: grab;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.queue-card:hover {
+    border-color: rgba(139, 92, 246, 0.55);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+}
+
+.queue-card.is-exported {
+    border-color: rgba(52, 211, 153, 0.5);
+}
+
+.queue-card-media {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    flex-shrink: 0;
+    background: #000;
+}
+
+.queue-card-media img,
+.queue-card-media video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.queue-card-media video {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+
+.queue-card-media video.is-playing {
+    opacity: 1;
+}
+
+.queue-card-badge {
+    position: absolute;
+    top: 7px;
+    left: 7px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.62em;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: #6ee7b7;
+    background: rgba(0, 0, 0, 0.72);
+    border: 1px solid rgba(52, 211, 153, 0.45);
+}
+
+.queue-card-remove {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72em;
+    line-height: 1;
+    color: rgba(255, 255, 255, 0.85);
+    background: rgba(0, 0, 0, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 50%;
     cursor: pointer;
-    transition: all 0.24s cubic-bezier(0.23, 1, 0.320, 1);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    transition: background 0.18s ease, color 0.18s ease;
 }
 
-.queue-clip-item:hover {
-    border-color: rgba(139, 92, 246, 0.3);
-    transform: translateX(4px);
+.queue-card-remove:hover {
+    background: rgba(239, 68, 68, 0.9);
+    color: #fff;
 }
 
-.queue-clip-item.selected {
-    background: linear-gradient(135deg, rgba(139, 92, 246, 0.15), rgba(236, 72, 153, 0.08)) !important;
-    border: 1px solid rgba(139, 92, 246, 0.4);
-    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+.queue-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 9px 10px 10px;
 }
 
-.queue-clip-item.dragging {
-    opacity: 0.7;
-    transform: scale(0.95) rotate(-8deg) translateZ(0);
-    border-color: rgba(139, 92, 246, 0.8);
-    filter: drop-shadow(0 0 15px rgba(139, 92, 246, 0.6)) drop-shadow(0 15px 40px rgba(139, 92, 246, 0.3));
-    animation: creativeDrag 0.8s ease-in-out infinite;
-    z-index: 1000;
+.queue-card-title {
+    font-size: 0.78em;
+    font-weight: 600;
+    line-height: 1.35;
+    color: #fff;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 
-.queue-clip-item.drag-over {
-    background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(236, 72, 153, 0.12)) !important;
-    border: 2px solid rgba(139, 92, 246, 0.6);
-    transform: scale(1.02);
+.queue-card-meta {
+    font-size: 0.68em;
+    color: rgba(255, 255, 255, 0.45);
 }
 
-@keyframes creativeDrag {
-    0% {
-        transform: scale(0.95) rotate(-8deg) translateY(0);
-        opacity: 0.7;
-    }
-    50% {
-        transform: scale(1) rotate(0deg) translateY(-8px);
-        opacity: 0.85;
-        filter: drop-shadow(0 0 25px rgba(139, 92, 246, 0.8)) drop-shadow(0 20px 50px rgba(139, 92, 246, 0.4));
-    }
-    100% {
-        transform: scale(0.95) rotate(-8deg) translateY(0);
-        opacity: 0.7;
-    }
-}
-
-.queue-clip-item .action-group {
-    gap: 4px;
-}
-
-.queue-clip-item .btn-small {
+.queue-card-analysis {
+    background: rgba(139, 92, 246, 0.1);
+    border-left: 2px solid rgba(139, 92, 246, 0.55);
+    border-radius: 0 6px 6px 0;
     padding: 6px 8px;
+}
+
+.queue-card-score {
+    display: block;
+    font-size: 0.66em;
+    font-weight: 700;
+    color: #c4b5fd;
+    margin-bottom: 3px;
+}
+
+.queue-card-transcript {
+    margin: 0;
+    font-size: 0.66em;
+    line-height: 1.45;
+    color: rgba(196, 181, 253, 0.92);
+    white-space: pre-line;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.queue-card-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.queue-btn {
+    flex: 1;
+    padding: 6px 8px;
+    font-size: 0.7em;
+    font-weight: 600;
+    color: #fff;
+    border: none;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: filter 0.18s ease;
+}
+
+.queue-btn:hover:not(:disabled) {
+    filter: brightness(1.14);
+}
+
+.queue-btn:disabled {
+    cursor: default;
+    filter: saturate(0.45) brightness(0.85);
+}
+
+.queue-btn-analyze {
+    background: rgba(139, 92, 246, 0.95);
+}
+
+.queue-btn-upload {
+    flex: 2;
+    font-size: 0.66em;
+    font-weight: 700;
+    white-space: nowrap;
+    background: linear-gradient(135deg, #10b981, #059669);
+}
+
+@media (max-width: 900px) {
+    .playground-layout {
+        flex-direction: column;
+    }
+
+    .queue-panel {
+        width: 100%;
+        max-height: 40vh;
+    }
 }
 
 /* ============================================================================== */

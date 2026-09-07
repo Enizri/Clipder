@@ -80,4 +80,4 @@ processed_clips/
 TASKS
 
 # Demo GIF capture intermediates
-docs/screenshots/_frames/
+docs/screenshots/_frames-*/

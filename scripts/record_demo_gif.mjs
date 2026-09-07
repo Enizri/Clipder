@@ -19,19 +19,32 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const FRAME_DIR = path.join(ROOT, 'docs', 'screenshots', '_frames');
+// Per-run directory: two recorders running at once must not delete each other's frames.
+const FRAME_DIR = path.join(ROOT, 'docs', 'screenshots', `_frames-${process.pid}`);
 const OUT_GIF = path.join(ROOT, 'docs', 'screenshots', 'clipder-demo.gif');
 const BASE = process.env.CLIPDER_DEMO_URL || 'http://localhost:3000';
+/** Capture size — kept at desktop width so the app renders its full three-column layout. */
 const WIDTH = 1280;
 const HEIGHT = 720;
-const FPS = 16;
+/**
+ * Encode size — GitHub renders README images at ~890px wide, so encoding at 896 avoids
+ * paying for pixels the browser would only throw away again.
+ */
+const OUT_WIDTH = 896;
+const OUT_HEIGHT = 504;
+const FPS = 25;
 const PLAYWRIGHT_CACHE = path.join(os.homedir(), '.cache', 'clipder-playwright');
 
+/**
+ * The pointer is a real Chromium mouse; this element only mirrors it so viewers can
+ * see where the input is happening. It is driven by mouse events, never animated,
+ * so the drawn cursor and the app's hover/drag state can never drift apart.
+ */
 const CURSOR_CSS = `
 #clipder-demo-cursor {
   position: fixed;
-  left: 48%;
-  top: 52%;
+  left: 50%;
+  top: 55%;
   width: 22px;
   height: 22px;
   border: 2.5px solid #fff;
@@ -40,13 +53,11 @@ const CURSOR_CSS = `
   box-shadow: 0 6px 16px rgba(0,0,0,0.5), 0 0 0 3px rgba(139,92,246,0.28);
   z-index: 2147483647;
   pointer-events: none;
-  transition: left 0.8s cubic-bezier(0.22, 1, 0.36, 1),
-              top 0.8s cubic-bezier(0.22, 1, 0.36, 1),
-              transform 0.14s ease;
+  transition: transform 0.12s ease;
   transform: translate(-3px, -3px) rotate(-18deg);
 }
-#clipder-demo-cursor.is-click {
-  transform: translate(-3px, -3px) rotate(-18deg) scale(0.78);
+#clipder-demo-cursor.is-down {
+  transform: translate(-3px, -3px) rotate(-18deg) scale(0.76);
 }
 `;
 
@@ -161,7 +172,7 @@ function densify(frames, fps) {
     while (i + 1 < frames.length && frames[i + 1].t <= t) i += 1;
     out.push(frames[i]);
   }
-  const hold = Math.round(fps * 2.2);
+  const hold = Math.round(fps * 1.4);
   for (let k = 0; k < hold; k += 1) out.push(frames[frames.length - 1]);
   return out;
 }
@@ -172,37 +183,89 @@ async function installCursor(page) {
     const el = document.createElement('div');
     el.id = 'clipder-demo-cursor';
     document.body.appendChild(el);
+    const opts = { capture: true, passive: true };
+    window.addEventListener(
+      'mousemove',
+      (e) => {
+        el.style.left = `${e.clientX}px`;
+        el.style.top = `${e.clientY}px`;
+      },
+      opts,
+    );
+    window.addEventListener('mousedown', () => el.classList.add('is-down'), opts);
+    window.addEventListener('mouseup', () => el.classList.remove('is-down'), opts);
   });
 }
 
-async function moveCursorTo(page, locator, ms = 800) {
+/** Last known pointer position, so every move starts where the previous one ended. */
+let pointer = { x: WIDTH / 2, y: HEIGHT * 0.55 };
+
+const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+
+/** Move the real mouse along an eased path at ~40Hz so the recording captures the travel. */
+async function glideTo(page, x, y, ms = 700) {
+  const from = pointer;
+  const steps = Math.max(2, Math.round(ms / 25));
+  for (let i = 1; i <= steps; i += 1) {
+    const e = easeInOut(i / steps);
+    await page.mouse.move(from.x + (x - from.x) * e, from.y + (y - from.y) * e);
+    await sleep(ms / steps);
+  }
+  pointer = { x, y };
+}
+
+async function centerOf(locator) {
   const box = await locator.boundingBox();
   if (!box) throw new Error('target has no bounding box');
-  const x = Math.round(box.x + box.width / 2);
-  const y = Math.round(box.y + box.height / 2);
-  await page.evaluate(
-    ({ x, y, ms }) => {
-      const el = document.getElementById('clipder-demo-cursor');
-      if (!el) return;
-      el.style.transitionDuration = `${ms}ms`;
-      el.style.left = `${x}px`;
-      el.style.top = `${y}px`;
-    },
-    { x, y, ms },
-  );
-  await sleep(ms + 100);
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
-async function clickWithCursor(page, locator) {
-  await page.evaluate(() => {
-    document.getElementById('clipder-demo-cursor')?.classList.add('is-click');
-  });
+async function glideToLocator(page, locator, ms = 700) {
+  const { x, y } = await centerOf(locator);
+  await glideTo(page, x, y, ms);
+}
+
+async function clickHere(page) {
+  await page.mouse.down();
+  await sleep(130);
+  await page.mouse.up();
+  await sleep(130);
+}
+
+/**
+ * Flick the top card off the stack with a genuine press-drag-release, so the recording
+ * shows the card tracking the pointer and the LIKE/NOPE hint growing with the distance.
+ */
+async function dragSwipe(page, direction = 'right') {
+  const card = page.locator('#card-stack .clip-card.top-card');
+  const box = await card.boundingBox();
+  if (!box) throw new Error('no top card to swipe');
+
+  // 42% down the card clears the hover controls at the top and the info overlay at the bottom.
+  const grabX = box.x + box.width / 2;
+  const grabY = box.y + box.height * 0.42;
+  await glideTo(page, grabX, grabY, 520);
+  await sleep(260);
+
+  await page.mouse.down();
   await sleep(140);
-  await locator.click();
-  await sleep(120);
-  await page.evaluate(() => {
-    document.getElementById('clipder-demo-cursor')?.classList.remove('is-click');
-  });
+
+  // Release shortly past the commit threshold: a flick, not a drag across the whole window.
+  const sign = direction === 'right' ? 1 : -1;
+  const distance = sign * box.width * 0.6;
+  const steps = 14;
+  for (let i = 1; i <= steps; i += 1) {
+    const t = i / steps;
+    // Accelerating travel with a slight upward bow.
+    const x = grabX + distance * t * t;
+    const y = grabY - 26 * Math.sin(Math.PI * t);
+    await page.mouse.move(x, y);
+    pointer = { x, y };
+    await sleep(24);
+  }
+
+  await sleep(60);
+  await page.mouse.up();
 }
 
 async function main() {
@@ -227,9 +290,9 @@ async function main() {
   await page.getByText('Clip for Anna').waitFor({ timeout: 15000 });
   await waitForHdThumbnails(page);
   await installCursor(page);
+  await page.mouse.move(pointer.x, pointer.y);
   await sleep(250);
 
-  const likeBtn = page.getByTestId('btn-like');
   const playgroundTab = page.getByTestId('nav-playground');
 
   const raw = [];
@@ -251,48 +314,44 @@ async function main() {
   });
 
   // 1. Let people read the first swipe card
-  await sleep(2600);
+  await sleep(2100);
 
-  // 2. First like
-  await moveCursorTo(page, likeBtn, 900);
-  await likeBtn.hover();
-  await sleep(700);
-  await clickWithCursor(page, likeBtn);
+  // 2. Swipe the first clip right by dragging it off the stack
+  await dragSwipe(page, 'right');
   await page.getByText('Emperor failed charisma check').waitFor({ timeout: 10000 });
   await waitForHdThumbnails(page);
-  await sleep(2200);
+  await sleep(1400);
 
-  // 3. Second like — Playground waits until this one so both swipes are visible
-  await sleep(400);
-  await clickWithCursor(page, likeBtn);
+  // 3. Second swipe — Playground waits until this one so both clips are in the queue
+  await dragSwipe(page, 'right');
   await page.getByText('Stax + Zest INSTANT 2v4 vs FPX').waitFor({ timeout: 10000 });
   await waitForHdThumbnails(page);
-  await sleep(1800);
+  await sleep(1300);
 
   // 4. Open Playground and show the queued clips
-  await moveCursorTo(page, playgroundTab, 850);
-  await sleep(400);
-  await clickWithCursor(page, playgroundTab);
+  await glideToLocator(page, playgroundTab, 800);
+  await sleep(280);
+  await clickHere(page);
   await page.getByRole('heading', { name: 'Your queue' }).waitFor({ timeout: 10000 });
   await page.getByText('Emperor failed charisma check').waitFor({ timeout: 10000 });
   await page.getByText('Clip for Anna').waitFor({ timeout: 10000 });
-  await sleep(2600);
+  await sleep(2200);
 
   // 5. Analyze and leave the transcript on screen
   const analyzeBtn = page.getByRole('button', { name: 'Analyze' }).first();
-  const uploadBtn = page.getByRole('button', { name: /Upload YouTube Shorts/ }).first();
-  await moveCursorTo(page, analyzeBtn, 700);
-  await sleep(400);
-  await clickWithCursor(page, analyzeBtn);
+  const uploadBtn = page.getByRole('button', { name: /Upload Shorts/ }).first();
+  await glideToLocator(page, analyzeBtn, 640);
+  await sleep(280);
+  await clickHere(page);
   await page.getByText('Transcript ready').waitFor({ timeout: 10000 });
-  await sleep(2800);
+  await sleep(2400);
 
   // 6. Queue YouTube Shorts + TikTok and hold the success state
-  await moveCursorTo(page, uploadBtn, 650);
-  await sleep(400);
-  await clickWithCursor(page, uploadBtn);
+  await glideToLocator(page, uploadBtn, 560);
+  await sleep(280);
+  await clickHere(page);
   await page.getByText('Queued for YouTube Shorts + TikTok.').waitFor({ timeout: 10000 });
-  await sleep(2800);
+  await sleep(2400);
 
   await session.send('Page.stopScreencast');
   await sleep(80);
@@ -312,7 +371,7 @@ async function main() {
   const ffmpeg = findFfmpeg();
   const palette = path.join(FRAME_DIR, '_palette.png');
   const seq = path.join(FRAME_DIR, '%04d.jpg');
-  const vf = `scale=${WIDTH}:${HEIGHT}:flags=lanczos,setsar=1,unsharp=3:3:0.6:3:3:0.0`;
+  const vf = `scale=${OUT_WIDTH}:${OUT_HEIGHT}:flags=lanczos,setsar=1,unsharp=3:3:0.5:3:3:0.0`;
 
   const gen = spawnSync(
     ffmpeg,
@@ -323,7 +382,7 @@ async function main() {
       '-i',
       seq,
       '-vf',
-      `${vf},palettegen=max_colors=256:reserve_transparent=0:stats_mode=full`,
+      `${vf},palettegen=max_colors=224:reserve_transparent=0:stats_mode=full`,
       palette,
     ],
     { encoding: 'utf8' },
@@ -369,9 +428,12 @@ async function main() {
     frames.length,
     'fps',
     FPS,
-    `${WIDTH}x${HEIGHT}`,
+    `${OUT_WIDTH}x${OUT_HEIGHT}`,
   );
-  await rm(FRAME_DIR, { recursive: true, force: true });
+  // CLIPDER_KEEP_FRAMES=1 leaves the JPEGs in place for re-encoding experiments.
+  if (process.env.CLIPDER_KEEP_FRAMES !== '1') {
+    await rm(FRAME_DIR, { recursive: true, force: true });
+  }
 }
 
 main().catch((err) => {

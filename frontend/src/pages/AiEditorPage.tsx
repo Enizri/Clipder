@@ -27,6 +27,14 @@ interface AiEditorPageProps {
   onShowAuth: () => void;
 }
 
+let messageIdSeq = 0;
+
+/** Monotonic keys — `Date.now()` collides when two messages are pushed in the same tick. */
+function nextMessageId(): number {
+  messageIdSeq += 1;
+  return messageIdSeq;
+}
+
 function isMarkedForExport(editHistory: unknown): boolean {
   if (!editHistory) return false;
   let actions: unknown = editHistory;
@@ -56,6 +64,26 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
   const [hoveredVideoUrl, setHoveredVideoUrl] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const hoverVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const chatLogRef = useRef<HTMLDivElement>(null);
+
+  /** Keep the newest message in view so long transcripts do not push it out of frame. */
+  useEffect(() => {
+    const log = chatLogRef.current;
+    if (log) log.scrollTop = log.scrollHeight;
+  }, [chatMessages]);
+
+  const handleCardHover = async (clip: QueueClip) => {
+    setHoveredClipId(clip.id);
+    if (isDemoMode() || hoveredClipId === clip.id) return;
+    try {
+      const data = await api.getVideoUrl(clip.id);
+      if (!data.video_url) return;
+      setHoveredVideoUrl(data.video_url);
+      setTimeout(() => hoverVideoRefs.current[clip.id]?.play().catch(() => {}), 50);
+    } catch {
+      // thumbnail stays
+    }
+  };
 
   useEffect(() => {
     if (!user) {
@@ -170,7 +198,7 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
       setChatMessages((prev) => [
         ...prev,
         {
-          _id: Date.now(),
+          _id: nextMessageId(),
           role: 'assistant',
           content: `Transcript ready (score ${Math.round(score * 100)}%).\n\n${transcript}\n\nSuggested title: ${title}`,
         },
@@ -202,7 +230,7 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
       setChatMessages((prev) => [
         ...prev,
         {
-          _id: Date.now(),
+          _id: nextMessageId(),
           role: 'assistant',
           content:
             'Queued for YouTube Shorts and TikTok. Live publish still needs platform credentials — this records the export decision.',
@@ -215,29 +243,26 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
     }
   };
 
+  /** Opens a clip's thread. Re-selecting the open clip is a no-op so Analyze/Upload
+   *  do not append a duplicate clip card and intro line. */
   const handleDropClip = (clip: QueueClip) => {
+    if (selectedClip?.id === clip.id) return;
     setSelectedClip(clip);
-    setChatMessages((prev) => [
-      ...prev,
+    setChatMessages([
       {
-        _id: Date.now(),
+        _id: nextMessageId(),
         role: 'user',
         content: clip.title,
         thumbnail_url: clip.thumbnail_url,
         type: 'clip',
       },
+      {
+        _id: nextMessageId(),
+        role: 'assistant',
+        content:
+          'Ask for titles, hooks, or Shorts/TikTok cuts. This uses Groq in the cloud — nothing runs on your laptop.',
+      },
     ]);
-    setTimeout(() => {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          _id: Date.now() + 1,
-          role: 'assistant',
-          content:
-            'Ask for titles, hooks, or Shorts/TikTok cuts. This uses Groq in the cloud — nothing runs on your laptop.',
-        },
-      ]);
-    }, 400);
   };
 
   const handleSend = async () => {
@@ -246,7 +271,7 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
     const userMsg = input.trim();
     setInput('');
     setAiLoading(true);
-    setChatMessages((prev) => [...prev, { _id: Date.now(), role: 'user', content: userMsg }]);
+    setChatMessages((prev) => [...prev, { _id: nextMessageId(), role: 'user', content: userMsg }]);
 
     try {
       const history = chatMessages
@@ -260,13 +285,13 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
       });
       setChatMessages((prev) => [
         ...prev,
-        { _id: Date.now(), role: 'assistant', content: data.response },
+        { _id: nextMessageId(), role: 'assistant', content: data.response },
       ]);
     } catch {
       setChatMessages((prev) => [
         ...prev,
         {
-          _id: Date.now(),
+          _id: nextMessageId(),
           role: 'assistant',
           content: "Sorry, I couldn't process your request. Please try again.",
         },
@@ -296,323 +321,169 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
   }
 
   return (
-    <div
-      id="ai-editor"
-      className="view-section active"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        padding: '20px',
-        overflow: 'auto',
-        alignItems: 'center',
-      }}
-    >
-      <div
-        style={{
-          width: '100%',
-          height: '100%',
-          display: 'flex',
-          gap: '16px',
-          position: 'relative',
-          padding: '20px',
-        }}
-      >
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-          <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <h2 style={{ marginBottom: '8px', textAlign: 'center' }}>Playground</h2>
-            <p style={{ textAlign: 'center', color: 'rgba(255,255,255,0.55)', fontSize: '0.85em', marginBottom: '16px' }}>
-              Liked clips land here. Skip to drop them, or mark for export. AI chat uses Groq.
-            </p>
-            {statusMessage && (
-              <p style={{ textAlign: 'center', color: 'rgba(244,114,182,0.9)', fontSize: '0.8em' }}>
-                {statusMessage}
-              </p>
-            )}
+    <div id="ai-editor" className="view-section active">
+      <div className="playground-layout">
+        <div className="playground-main">
+          <h2 className="playground-heading">Playground</h2>
+          <p className="playground-subtitle">
+            Liked clips land here. Skip to drop them, or mark for export. AI chat uses Groq.
+          </p>
+          <p className="playground-status">{statusMessage}</p>
 
-            <div
-              className="ai-chat-panel"
-              style={{
-                background: 'rgba(30,30,40,0.08)',
-                borderRadius: '14px',
-                border: '1px solid rgba(100,100,120,0.2)',
-                padding: '20px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '16px',
-                flex: 1,
-                minHeight: 0,
-                backdropFilter: 'blur(2px)',
-              }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.currentTarget.classList.add('drop-active');
-              }}
-              onDragLeave={(e) => e.currentTarget.classList.remove('drop-active')}
-              onDrop={(e) => {
-                e.preventDefault();
-                e.currentTarget.classList.remove('drop-active');
-                const clipDataStr = e.dataTransfer?.getData('clipData');
-                if (clipDataStr) {
-                  try {
-                    handleDropClip(JSON.parse(clipDataStr) as QueueClip);
-                  } catch {
-                    // ignore
-                  }
+          <div
+            className="ai-chat-panel playground-chat"
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.currentTarget.classList.add('drop-active');
+            }}
+            onDragLeave={(e) => e.currentTarget.classList.remove('drop-active')}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.currentTarget.classList.remove('drop-active');
+              const clipDataStr = e.dataTransfer?.getData('clipData');
+              if (clipDataStr) {
+                try {
+                  handleDropClip(JSON.parse(clipDataStr) as QueueClip);
+                } catch {
+                  // ignore
                 }
-              }}
-            >
-              <div
-                style={{
-                  flex: 1,
-                  background: 'rgba(0,0,0,0.2)',
-                  borderRadius: '8px',
-                  padding: '16px',
-                  overflowY: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '12px',
-                }}
-              >
-                {chatMessages.length === 0 ? (
+              }
+            }}
+          >
+            <div className="playground-chat-log" ref={chatLogRef}>
+              {chatMessages.length === 0 ? (
+                <div className="playground-chat-empty">
+                  Drag a clip from your queue, or click it, to start.
+                </div>
+              ) : (
+                chatMessages.map((msg) => (
                   <div
-                    style={{
-                      textAlign: 'center',
-                      color: 'rgba(255,255,255,0.5)',
-                      margin: 'auto',
-                      fontSize: '0.95em',
-                    }}
+                    key={msg._id}
+                    className={`playground-msg ${msg.role === 'user' ? 'is-user' : 'is-assistant'}`}
                   >
-                    Drag a clip from your queue, or click it, to start.
+                    {msg.type === 'clip' && msg.thumbnail_url ? (
+                      <div className="playground-msg-clip">
+                        <img src={msg.thumbnail_url} alt="" draggable={false} />
+                        <div className="playground-msg-clip-caption">{msg.content}</div>
+                      </div>
+                    ) : (
+                      <div className="playground-msg-bubble">{msg.content}</div>
+                    )}
                   </div>
-                ) : (
-                  chatMessages.map((msg) => (
-                    <div
-                      key={msg._id}
-                      style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}
-                    >
-                      {msg.type === 'clip' && msg.thumbnail_url ? (
-                        <div
-                          style={{
-                            maxWidth: '280px',
-                            overflow: 'hidden',
-                            borderRadius: '12px',
-                            border: '1px solid rgba(100,100,120,0.2)',
-                          }}
-                        >
-                          <video
-                            poster={msg.thumbnail_url}
-                            style={{ width: '100%', height: 'auto', display: 'block', borderRadius: '10px' }}
-                          />
-                          <div
-                            style={{
-                              background: 'rgba(30,30,40,0.5)',
-                              color: 'rgba(255,255,255,0.8)',
-                              padding: '8px 12px',
-                              fontSize: '0.85em',
-                              textAlign: 'center',
-                            }}
-                          >
-                            {msg.content}
-                          </div>
-                        </div>
-                      ) : (
-                        <div
-                          style={{
-                            background: 'rgba(59,130,246,0.08)',
-                            color: 'white',
-                            padding: '12px 14px',
-                            borderRadius: '12px',
-                            maxWidth: '75%',
-                            wordWrap: 'break-word',
-                          }}
-                        >
-                          {msg.content}
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
+                ))
+              )}
+            </div>
 
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                  placeholder={
-                    selectedClip ? 'Ask Groq for titles, hooks, or cuts…' : 'Select a clip first'
-                  }
-                  disabled={!selectedClip}
-                  style={{
-                    flex: 1,
-                    padding: '10px 14px',
-                    background: 'rgba(30,41,59,0.6)',
-                    border: '1px solid rgba(147,51,234,0.2)',
-                    borderRadius: '8px',
-                    color: 'white',
-                  }}
-                />
-                <button
-                  onClick={handleSend}
-                  disabled={!selectedClip || aiLoading}
-                  style={{
-                    padding: '10px 16px',
-                    background: 'linear-gradient(135deg, #9333ea, #ec4899)',
-                    border: 'none',
-                    borderRadius: '8px',
-                    color: 'white',
-                    cursor: 'pointer',
-                    opacity: !selectedClip || aiLoading ? 0.5 : 1,
-                  }}
-                >
-                  Send
-                </button>
-              </div>
+            <div className="playground-chat-input-row">
+              <input
+                type="text"
+                className="ai-input"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                placeholder={
+                  selectedClip ? 'Ask Groq for titles, hooks, or cuts…' : 'Select a clip first'
+                }
+                disabled={!selectedClip}
+              />
+              <button
+                type="button"
+                className="queue-btn queue-btn-analyze"
+                style={{ flex: '0 0 auto', padding: '0 20px', fontSize: '0.85em' }}
+                onClick={handleSend}
+                disabled={!selectedClip || aiLoading}
+              >
+                Send
+              </button>
             </div>
           </div>
         </div>
 
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '12px',
-            height: 'calc(100vh - 80px)',
-            width: '320px',
-            background: 'rgba(30,30,40,0.15)',
-            borderRadius: '14px',
-            border: '1px solid rgba(100,100,120,0.15)',
-            padding: '16px',
-            overflowY: 'auto',
-            flexShrink: 0,
-          }}
-        >
-          <h3 style={{ color: '#f472b6', margin: 0, fontSize: '0.95em' }}>Your queue</h3>
+        <aside className="queue-panel">
+          <div className="queue-panel-header">
+            <h3>Your queue</h3>
+            {queue.length > 0 && (
+              <span className="queue-panel-count">
+                {queue.length} clip{queue.length === 1 ? '' : 's'}
+              </span>
+            )}
+          </div>
 
           {queue.length === 0 ? (
-            <div
-              style={{
-                textAlign: 'center',
-                color: 'rgba(255,255,255,0.4)',
-                padding: '40px 10px',
-                fontSize: '0.85em',
-              }}
-            >
-              <div style={{ fontSize: '2em', marginBottom: '8px' }}>📤</div>
+            <div className="queue-empty">
+              <div className="queue-empty-icon">📤</div>
               <div>Swipe right on a clip to add it here</div>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div className="queue-list">
               {queue.map((clip) => (
-                <div
+                <article
                   key={clip.id}
+                  className={`queue-card${clip.marked_for_export ? ' is-exported' : ''}`}
                   draggable
                   onDragStart={(e) => {
                     e.dataTransfer.setData('clipData', JSON.stringify(clip));
                   }}
-                    onMouseEnter={async (e) => {
-                    (e.currentTarget as HTMLElement).style.transform = 'scale(1.03)';
-                    setHoveredClipId(clip.id);
-                    if (isDemoMode()) return;
-                    if (!hoveredVideoUrl || hoveredClipId !== clip.id) {
-                      try {
-                        const data = await api.getVideoUrl(clip.id);
-                        if (data.video_url) {
-                          setHoveredVideoUrl(data.video_url);
-                          setTimeout(() => hoverVideoRefs.current[clip.id]?.play().catch(() => {}), 50);
-                        }
-                      } catch {
-                        // thumbnail stays
-                      }
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLElement).style.transform = 'scale(1)';
+                  onMouseEnter={() => void handleCardHover(clip)}
+                  onMouseLeave={() => {
                     setHoveredClipId(null);
                     hoverVideoRefs.current[clip.id]?.pause();
                   }}
-                  style={{
-                    position: 'relative',
-                    borderRadius: '10px',
-                    overflow: 'hidden',
-                    border: clip.marked_for_export
-                      ? '2px solid rgba(52,211,153,0.7)'
-                      : '2px solid rgba(236,72,153,0.4)',
-                    cursor: 'grab',
-                    backgroundImage: `url(${clip.thumbnail_url})`,
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center',
-                    minHeight: '110px',
-                    flexShrink: 0,
-                  }}
                   onClick={() => handleDropClip(clip)}
                 >
-                  <div
-                    style={{
-                      width: '100%',
-                      minHeight: '110px',
-                      background: 'linear-gradient(to bottom, transparent, rgba(0,0,0,0.85))',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'flex-end',
-                      padding: '8px',
-                      gap: '6px',
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: '0.7em',
-                        color: 'rgba(255,255,255,0.95)',
-                        fontWeight: 500,
-                        lineHeight: 1.2,
-                      }}
-                    >
-                      {clip.title}
-                    </div>
-                    {clip.transcript && (
-                      <div
-                        style={{
-                          fontSize: '0.62em',
-                          color: 'rgba(196,181,253,0.95)',
-                          lineHeight: 1.35,
-                          maxHeight: '3.2em',
-                          overflow: 'hidden',
+                  <div className="queue-card-media">
+                    <img src={clip.thumbnail_url} alt="" draggable={false} loading="lazy" />
+                    {hoveredClipId === clip.id && hoveredVideoUrl && (
+                      <video
+                        ref={(el) => {
+                          hoverVideoRefs.current[clip.id] = el;
                         }}
-                      >
-                        {clip.analysisScore != null
-                          ? `Score ${Math.round(clip.analysisScore * 100)}% · `
-                          : ''}
-                        {clip.transcript}
-                      </div>
+                        className="is-playing"
+                        src={hoveredVideoUrl}
+                        muted
+                        loop
+                        playsInline
+                      />
                     )}
                     {clip.marked_for_export && (
-                      <span style={{ fontSize: '0.65em', color: '#6ee7b7' }}>
-                        Queued · YouTube Shorts + TikTok
-                      </span>
+                      <span className="queue-card-badge">QUEUED</span>
                     )}
-                    <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      type="button"
+                      className="queue-card-remove"
+                      title="Remove from queue"
+                      aria-label={`Remove ${clip.title} from queue`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleRemoveFromQueue(clip.id);
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <div className="queue-card-body">
+                    <div className="queue-card-title">{clip.title}</div>
+                    <div className="queue-card-meta">
+                      {clip.creator_name || clip.channel}
+                      {clip.marked_for_export ? ' · YouTube Shorts + TikTok' : ''}
+                    </div>
+
+                    {clip.transcript && (
+                      <div className="queue-card-analysis">
+                        {clip.analysisScore != null && (
+                          <span className="queue-card-score">
+                            Score {Math.round(clip.analysisScore * 100)}%
+                          </span>
+                        )}
+                        <p className="queue-card-transcript">{clip.transcript}</p>
+                      </div>
+                    )}
+
+                    <div className="queue-card-actions">
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleRemoveFromQueue(clip.id);
-                        }}
-                        style={{
-                          flex: 1,
-                          padding: '4px 6px',
-                          fontSize: '0.7em',
-                          border: 'none',
-                          borderRadius: '6px',
-                          background: 'rgba(239,68,68,0.85)',
-                          color: 'white',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Skip
-                      </button>
-                      <button
-                        type="button"
+                        className="queue-btn queue-btn-analyze"
                         data-testid={`btn-analyze-${clip.id}`}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -620,57 +491,33 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
                           void handleAnalyze(clip);
                         }}
                         disabled={Boolean(clip.analyzing) || Boolean(clip.transcript)}
-                        style={{
-                          flex: 1,
-                          padding: '4px 6px',
-                          fontSize: '0.7em',
-                          border: 'none',
-                          borderRadius: '6px',
-                          background: clip.transcript
-                            ? 'rgba(139,92,246,0.45)'
-                            : 'rgba(139,92,246,0.95)',
-                          color: 'white',
-                          cursor: clip.transcript || clip.analyzing ? 'default' : 'pointer',
-                        }}
                       >
                         {clip.analyzing ? 'Analyzing…' : clip.transcript ? 'Analyzed' : 'Analyze'}
                       </button>
+                      <button
+                        type="button"
+                        className="queue-btn queue-btn-upload"
+                        data-testid={`btn-upload-${clip.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDropClip(clip);
+                          void handleUpload(clip);
+                        }}
+                        disabled={clip.marked_for_export || Boolean(clip.uploading)}
+                      >
+                        {clip.uploading
+                          ? 'Uploading…'
+                          : clip.marked_for_export
+                            ? 'Uploaded'
+                            : 'Upload Shorts + TikTok'}
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      data-testid={`btn-upload-${clip.id}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDropClip(clip);
-                        void handleUpload(clip);
-                      }}
-                      disabled={clip.marked_for_export || Boolean(clip.uploading)}
-                      style={{
-                        width: '100%',
-                        padding: '6px 6px',
-                        fontSize: '0.68em',
-                        fontWeight: 700,
-                        border: 'none',
-                        borderRadius: '6px',
-                        background: clip.marked_for_export
-                          ? 'rgba(52,211,153,0.4)'
-                          : 'rgba(16,185,129,0.95)',
-                        color: 'white',
-                        cursor: clip.marked_for_export || clip.uploading ? 'default' : 'pointer',
-                      }}
-                    >
-                      {clip.uploading
-                        ? 'Uploading…'
-                        : clip.marked_for_export
-                          ? 'Uploaded'
-                          : 'Upload YouTube Shorts + TikTok'}
-                    </button>
                   </div>
-                </div>
+                </article>
               ))}
             </div>
           )}
-        </div>
+        </aside>
       </div>
     </div>
   );
