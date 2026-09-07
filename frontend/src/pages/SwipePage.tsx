@@ -13,8 +13,8 @@ const GUEST_SWIPE_LIMIT = 15;
 
 /** Card tilts toward the chosen side before it flies off, so a button press reads as a swipe. */
 const SWIPE_ARM_MS = 170;
-/** Fly-out duration. Kept long enough that the motion is legible at low frame rates. */
-const SWIPE_EXIT_MS = 460;
+/** Fly-out duration: long enough to read as a flick, short enough not to stall the GIF. */
+const SWIPE_EXIT_MS = 420;
 
 const isViteDev = (): boolean =>
   Boolean((import.meta as { env?: { DEV?: boolean } }).env?.DEV);
@@ -95,6 +95,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
   const prevClipOptsKeyRef = useRef<string | null>(null);
   const isDragging = useRef(false);
   const startX = useRef(0);
+  const startY = useRef(0);
   const currentX = useRef(0);
   const isSwiping = useRef(false);
 
@@ -212,16 +213,6 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
     });
   }, []);
 
-  /**
-   * Swiping normally halts playback so a card leaving the stack goes quiet. In demo mode the
-   * card keeps playing through the grab and the fly-out, which is what makes the gesture look
-   * live rather than like dragging a screenshot around.
-   */
-  const stopVideosForSwipe = useCallback(() => {
-    if (isDemoMode()) return;
-    stopAllVideos();
-  }, [stopAllVideos]);
-
   const deferredFeedSearch = useDeferredValue(feedSearch);
   const filteredFeedCategories = useMemo(() => {
     const q = normalizeFollowSearchQuery(deferredFeedSearch);
@@ -334,7 +325,6 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
       if (!currentClip) return;
 
       isSwiping.current = true;
-      stopVideosForSwipe();
 
       // A drag already carried the card off-centre, so it flies out immediately.
       // A button press first arms (tilt + hint) so the motion does not teleport.
@@ -397,7 +387,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
         isSwiping.current = false;
       }, armMs + SWIPE_EXIT_MS);
     },
-    [clips, currentIndex, stopVideosForSwipe, user, clipRequestOpts]
+    [clips, currentIndex, user, clipRequestOpts]
   );
 
   // ---------------------------------------------------------------------------
@@ -414,20 +404,22 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
     )
       return;
     isDragging.current = true;
-    startX.current = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    currentX.current = startX.current;
+    const point = 'touches' in e ? e.touches[0] : e;
+    startX.current = point.clientX;
+    startY.current = point.clientY;
+    currentX.current = point.clientX;
     cardRef.current?.classList.add('dragging');
-    stopVideosForSwipe();
   };
 
   const handleMouseMove = useCallback(
     (e: MouseEvent | TouchEvent) => {
       if (!isDragging.current || !cardRef.current) return;
       if ('preventDefault' in e) e.preventDefault();
-      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-      currentX.current = clientX;
-      const deltaX = clientX - startX.current;
-      cardRef.current.style.transform = `translate(${deltaX}px,0) rotate(${deltaX * 0.03}deg)`;
+      const point = 'touches' in e ? e.touches[0] : e;
+      currentX.current = point.clientX;
+      const deltaX = point.clientX - startX.current;
+      const deltaY = point.clientY - startY.current;
+      cardRef.current.style.transform = `translate(${deltaX}px, ${deltaY * 0.35}px) rotate(${deltaX * 0.045}deg)`;
 
       const threshold = 50;
       const getHint = (sel: string) =>
@@ -680,9 +672,8 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
                     const sign = leavingDirection === 'right' ? 1 : -1;
                     cardStyle = {
                       ...cardStyle,
-                      // Ease-out with a delayed fade: the card stays readable for most of its arc.
-                      transition: `transform ${SWIPE_EXIT_MS}ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity ${Math.round(SWIPE_EXIT_MS * 0.7)}ms ease-in ${Math.round(SWIPE_EXIT_MS * 0.3)}ms`,
-                      transform: `translate(${sign * 145}%, -60px) rotate(${sign * 22}deg) scale(0.94)`,
+                      transition: `transform ${SWIPE_EXIT_MS}ms cubic-bezier(0.15, 0.7, 0.35, 1), opacity ${Math.round(SWIPE_EXIT_MS * 0.55)}ms ease-in ${Math.round(SWIPE_EXIT_MS * 0.2)}ms`,
+                      transform: `translate(${sign * 130}%, -28px) rotate(${sign * 18}deg) scale(0.96)`,
                       opacity: 0,
                     };
                   } else if (idx === 0 && swipeDirection) {
@@ -695,8 +686,9 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
                   } else if (idx > 0) {
                     cardStyle = {
                       ...cardStyle,
-                      transform: `scale(${1 - idx * 0.03}) translateY(${idx * 10}px)`,
-                      opacity: 1 - idx * 0.08,
+                      transform: `scale(${0.94 - idx * 0.04}) translateY(${idx * 18}px)`,
+                      opacity: Math.max(0.2, 0.4 - idx * 0.15),
+                      filter: 'brightness(0.55)',
                     };
                   }
 
@@ -713,7 +705,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
                         clip={clip}
                         onOpenTheater={() => openTheaterMode(clip.id)}
                         isPreload={idx !== 0}
-                        autoPlay={idx === 0 && isDemoMode()}
+                        autoPlay={idx === 0}
                       >
                         <div className="clip-info" style={{ pointerEvents: 'none' }}>
                           <div className="clip-title">{clip.title}</div>

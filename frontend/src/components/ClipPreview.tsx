@@ -8,7 +8,7 @@ interface ClipPreviewProps {
   clip: Clip;
   onOpenTheater: () => void;
   isPreload?: boolean;
-  /** Play without waiting for hover — used for the top card of the swipe stack in demo mode. */
+  /** Play without waiting for hover — used for the top card of the swipe stack. */
   autoPlay?: boolean;
   children?: React.ReactNode;
 }
@@ -21,6 +21,7 @@ export const ClipPreview = React.memo(function ClipPreview({
   children,
 }: ClipPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -67,36 +68,86 @@ export const ClipPreview = React.memo(function ClipPreview({
     if (isHovering || isPreload || autoPlay) fetchVideoUrl();
   }, [isHovering, isPreload, autoPlay, fetchVideoUrl]);
 
+  const shouldPlay = Boolean(autoPlay) || isHovering;
+  // Headless capture and first-paint autoplay both require the muted attribute to stay set.
+  // Unmuting on hover is fine in a real browser; in demo mode we never unmute.
+  const forceMuted = isDemoMode() || isMuted || (Boolean(autoPlay) && !isHovering);
+
   // Play once the src lands, either on hover or because this card is the active one
   useEffect(() => {
-    if (!videoSrc || !(isHovering || autoPlay)) return;
+    if (!videoSrc || !shouldPlay) return;
     const video = videoRef.current;
     if (!video) return;
     const play = () => {
-      // Browsers only allow gesture-free playback while muted.
-      if (autoPlay && !isHovering) {
-        video.muted = true;
-      } else {
-        video.volume = volume / 100;
-        video.muted = false;
-      }
-      video.play().catch(() => {});
-      setIsPlaying(true);
+      video.muted = forceMuted;
+      if (!forceMuted) video.volume = volume / 100;
+      video
+        .play()
+        .then(() => setIsPlaying(true))
+        .catch(() => {
+          video.muted = true;
+          video.play().then(() => setIsPlaying(true)).catch(() => {});
+        });
     };
     if (video.readyState >= 2) {
       play();
     } else {
       video.addEventListener('canplay', play, { once: true });
     }
-  }, [isHovering, autoPlay, videoSrc, volume]);
+  }, [shouldPlay, forceMuted, videoSrc, volume]);
 
   // Pause when the mouse leaves, unless this card is auto-playing
   useEffect(() => {
-    if (!isHovering && !autoPlay && isPlaying) {
+    if (!shouldPlay && isPlaying) {
       videoRef.current?.pause();
       setIsPlaying(false);
     }
-  }, [isHovering, autoPlay, isPlaying]);
+  }, [shouldPlay, isPlaying]);
+
+  // Demo GIF capture: GPU video overlays are invisible to Chrome's screencast, so paint
+  // each decoded frame onto a canvas that lives in the regular compositor.
+  useEffect(() => {
+    if (!isDemoMode() || !isPlaying) return;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return;
+    let raf = 0;
+    let lastW = 0;
+    let lastH = 0;
+    const draw = () => {
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      const dw = canvas.clientWidth;
+      const dh = canvas.clientHeight;
+      if (vw > 0 && vh > 0 && dw > 0 && dh > 0) {
+        const dpr = window.devicePixelRatio || 1;
+        const tw = Math.round(dw * dpr);
+        const th = Math.round(dh * dpr);
+        if (canvas.width !== tw || canvas.height !== th) {
+          canvas.width = tw;
+          canvas.height = th;
+        }
+        if (lastW !== tw || lastH !== th) {
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          lastW = tw;
+          lastH = th;
+        }
+        const scale = Math.max(dw / vw, dh / vh);
+        const sw = dw / scale;
+        const sh = dh / scale;
+        try {
+          ctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, dw, dh);
+        } catch {
+          /* tainted frame — keep the loop alive for the next tick */
+        }
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    draw();
+    return () => cancelAnimationFrame(raf);
+  }, [isPlaying]);
 
   const handlePlayPause = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -166,13 +217,20 @@ export const ClipPreview = React.memo(function ClipPreview({
       <video
         ref={videoRef}
         src={videoSrc || undefined}
-        className={`video-player ${isPlaying ? 'playing' : ''}`}
+        className={`video-player ${isPlaying ? 'playing' : ''}${isDemoMode() ? ' demo-src' : ''}`}
         loop
-        muted={isMuted}
+        muted={forceMuted}
+        autoPlay={Boolean(autoPlay)}
         playsInline
         onTimeUpdate={handleTimeUpdate}
         preload="auto"
       />
+      {isDemoMode() && (
+        <canvas
+          ref={canvasRef}
+          className={`video-player demo-canvas ${isPlaying ? 'playing' : ''}`}
+        />
+      )}
       <div className={`video-loading ${isLoading ? 'active' : ''}`} />
 
       <button

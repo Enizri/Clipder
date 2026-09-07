@@ -32,14 +32,11 @@ const HEIGHT = 720;
  */
 const OUT_WIDTH = 896;
 const OUT_HEIGHT = 504;
-const FPS = 25;
-/** Playback speed multiplier applied when resampling the capture. See `densify`. */
-const SPEED = 1.35;
 const PLAYWRIGHT_CACHE = path.join(os.homedir(), '.cache', 'clipder-playwright');
 /** Downloaded demo clip MP4s, cached across runs (signed source URLs expire within a day). */
 const VIDEO_CACHE = path.join(os.homedir(), '.cache', 'clipder-demo-videos');
-/** Synthetic origin the cached MP4s are served from during the recording. */
-const VIDEO_ORIGIN = 'https://clipder-demo-video.invalid';
+/** Same-origin path so the demo canvas can copy video frames without tainting. */
+const VIDEO_PATH = '/__clipder_demo';
 
 /**
  * macOS arrow shape (straight left edge, notch, trailing tail). Filled white rather than
@@ -218,7 +215,7 @@ async function serveDemoVideos(context, files) {
     await Promise.all(Object.entries(files).map(async ([id, f]) => [id, await readFile(f)])),
   );
 
-  await context.route(`${VIDEO_ORIGIN}/*.mp4`, async (route, request) => {
+  await context.route(`**${VIDEO_PATH}/*.mp4`, async (route, request) => {
     const id = path.basename(new URL(request.url()).pathname, '.mp4');
     const body = bodies[id];
     if (!body) return route.fulfill({ status: 404, body: '' });
@@ -231,6 +228,7 @@ async function serveDemoVideos(context, files) {
           'content-type': 'video/mp4',
           'content-length': String(body.length),
           'accept-ranges': 'bytes',
+          'access-control-allow-origin': '*',
         },
         body,
       });
@@ -241,12 +239,13 @@ async function serveDemoVideos(context, files) {
     const slice = body.subarray(start, end + 1);
     return route.fulfill({
       status: 206,
-      headers: {
-        'content-type': 'video/mp4',
-        'content-length': String(slice.length),
-        'content-range': `bytes ${start}-${end}/${body.length}`,
-        'accept-ranges': 'bytes',
-      },
+        headers: {
+          'content-type': 'video/mp4',
+          'content-length': String(slice.length),
+          'content-range': `bytes ${start}-${end}/${body.length}`,
+          'accept-ranges': 'bytes',
+          'access-control-allow-origin': '*',
+        },
       body: slice,
     });
   });
@@ -257,10 +256,27 @@ async function waitForCardPlayback(page) {
   await page.waitForFunction(
     () => {
       const v = document.querySelector('.clip-card.top-card video');
-      return Boolean(v && v.readyState >= 3 && !v.paused && v.currentTime > 0.1);
+      return Boolean(
+        v &&
+          v.classList.contains('playing') &&
+          v.readyState >= 3 &&
+          !v.paused &&
+          v.currentTime > 0.15,
+      );
     },
     undefined,
-    { timeout: 20000 },
+    { timeout: 25000 },
+  );
+  const started = await page.evaluate(
+    () => document.querySelector('.clip-card.top-card video')?.currentTime ?? 0,
+  );
+  await page.waitForFunction(
+    (t0) => {
+      const v = document.querySelector('.clip-card.top-card video');
+      return Boolean(v && !v.paused && v.currentTime > t0 + 0.4);
+    },
+    started,
+    { timeout: 10000 },
   );
 }
 
@@ -293,25 +309,17 @@ async function waitForHdThumbnails(page, minWidth = 1280) {
 }
 
 /**
- * Resample the screencast (which only emits frames when pixels change) onto a fixed
- * grid. Walking the source timeline in `SPEED / fps` increments plays the whole
- * walkthrough back that much faster while still emitting a distinct frame per step —
- * the capture rate during animation is well above the output rate, so nothing is
- * duplicated where it matters.
+ * Keep the screencast's own timestamps. Stretching 10 fps captures onto a 25 fps
+ * grid was duplicating frames and made the swipe look like it was hitching.
  */
-function densify(frames, fps, speed = SPEED) {
+function timedFrames(frames, holdSec = 0.7) {
   if (frames.length === 0) return [];
-  const step = speed / fps;
   const out = [];
-  const start = frames[0].t;
-  const end = frames[frames.length - 1].t;
-  let i = 0;
-  for (let t = start; t <= end + 1e-6; t += step) {
-    while (i + 1 < frames.length && frames[i + 1].t <= t) i += 1;
-    out.push(frames[i]);
+  for (let i = 0; i < frames.length; i += 1) {
+    const nextT = i + 1 < frames.length ? frames[i + 1].t : frames[i].t + holdSec;
+    const duration = Math.min(0.22, Math.max(0.04, nextT - frames[i].t));
+    out.push({ buf: frames[i].buf, duration });
   }
-  const hold = Math.round(fps * 1.0);
-  for (let k = 0; k < hold; k += 1) out.push(frames[frames.length - 1]);
   return out;
 }
 
@@ -336,6 +344,17 @@ async function installCursor(page) {
     );
     window.addEventListener('mousedown', () => ring.classList.add('is-down'), opts);
     window.addEventListener('mouseup', () => ring.classList.remove('is-down'), opts);
+    const tick = document.createElement('div');
+    tick.style.cssText =
+      'position:fixed;top:0;left:0;width:1px;height:1px;pointer-events:none;z-index:2147483647';
+    document.body.append(tick);
+    let on = false;
+    const pulse = () => {
+      on = !on;
+      tick.style.background = on ? '#0b0b12' : '#0c0c13';
+      requestAnimationFrame(pulse);
+    };
+    requestAnimationFrame(pulse);
   });
 }
 
@@ -378,39 +397,51 @@ async function clickHere(page) {
 }
 
 /**
- * Flick the top card off the stack with a genuine press-drag-release, so the recording
- * shows the card tracking the pointer and the LIKE/NOPE hint growing with the distance.
+ * Press, pull far enough for LIKE/NOPE to read, then flick. The extra samples are
+ * what make the card track the cursor in the GIF instead of teleporting.
  */
 async function dragSwipe(page, direction = 'right') {
   const card = page.locator('#card-stack .clip-card.top-card');
   const box = await card.boundingBox();
   if (!box) throw new Error('no top card to swipe');
 
-  // 42% down the card clears the hover controls at the top and the info overlay at the bottom.
   const grabX = box.x + box.width / 2;
   const grabY = box.y + box.height * 0.42;
-  await glideTo(page, grabX, grabY, 440);
-  await sleep(190);
+  await glideTo(page, grabX, grabY, 480);
+  await sleep(140);
 
   await page.mouse.down();
-  await sleep(120);
+  await sleep(80);
 
-  // Release shortly past the commit threshold: a flick, not a drag across the whole window.
   const sign = direction === 'right' ? 1 : -1;
-  const distance = sign * box.width * 0.6;
-  const steps = 14;
-  for (let i = 1; i <= steps; i += 1) {
-    const t = i / steps;
-    // Accelerating travel with a slight upward bow.
-    const x = grabX + distance * t * t;
-    const y = grabY - 26 * Math.sin(Math.PI * t);
+  const pull = sign * Math.max(64, box.width * 0.22);
+  const flick = sign * box.width * 0.7;
+
+  const pullSteps = 11;
+  for (let i = 1; i <= pullSteps; i += 1) {
+    const t = i / pullSteps;
+    const x = grabX + pull * t;
+    const y = grabY - 8 * t;
     await page.mouse.move(x, y);
     pointer = { x, y };
-    await sleep(24);
+    await sleep(26);
+  }
+  await sleep(70);
+
+  const flickSteps = 14;
+  for (let i = 1; i <= flickSteps; i += 1) {
+    const t = i / flickSteps;
+    const eased = t * t;
+    const x = grabX + pull + (flick - pull) * eased;
+    const y = grabY - 8 - 20 * Math.sin(Math.PI * t);
+    await page.mouse.move(x, y);
+    pointer = { x, y };
+    await sleep(16);
   }
 
-  await sleep(60);
+  await sleep(40);
   await page.mouse.up();
+  await sleep(460);
 }
 
 async function main() {
@@ -421,11 +452,22 @@ async function main() {
   const { chromium } = await loadPlaywright();
   const browser = await chromium.launch({
     headless: true,
-    args: ['--force-color-profile=srgb', '--disable-lcd-text', '--hide-scrollbars'],
+    args: [
+      '--force-color-profile=srgb',
+      '--disable-lcd-text',
+      '--hide-scrollbars',
+      // Gesture-free muted playback, and software decode so CDP screencast sees video frames
+      // instead of a compositor hole where the GPU overlay sat.
+      '--autoplay-policy=no-user-gesture-required',
+      '--disable-accelerated-video-decode',
+      '--disable-accelerated-video-encode',
+      '--use-gl=angle',
+      '--use-angle=swiftshader',
+    ],
   });
   const context = await browser.newContext({
     viewport: { width: WIDTH, height: HEIGHT },
-    deviceScaleFactor: 2,
+    deviceScaleFactor: 1,
     colorScheme: 'dark',
   });
   const demoIds = await readDemoClipIds();
@@ -438,7 +480,7 @@ async function main() {
     (map) => {
       window.__clipderDemoVideos = map;
     },
-    Object.fromEntries(demoIds.map((id) => [id, `${VIDEO_ORIGIN}/${id}.mp4`])),
+    Object.fromEntries(demoIds.map((id) => [id, `${VIDEO_PATH}/${id}.mp4`])),
   );
 
   await page.goto(`${BASE}/?demo=1`, { waitUntil: 'load' });
@@ -463,60 +505,61 @@ async function main() {
   });
   await session.send('Page.startScreencast', {
     format: 'jpeg',
-    quality: 100,
-    maxWidth: WIDTH * 2,
-    maxHeight: HEIGHT * 2,
+    quality: 55,
+    maxWidth: WIDTH,
+    maxHeight: HEIGHT,
     everyNthFrame: 1,
   });
 
   // 1. Let people read the first swipe card
-  await sleep(1550);
+  await sleep(900);
 
   // 2. Swipe the first clip right by dragging it off the stack
   await dragSwipe(page, 'right');
-  await page.getByText('Emperor failed charisma check').waitFor({ timeout: 10000 });
+  await page.getByText('holy aim').waitFor({ timeout: 10000 });
   await waitForHdThumbnails(page);
   await waitForCardPlayback(page);
-  await sleep(1000);
+  await sleep(700);
 
   // 3. Second swipe — Playground waits until this one so both clips are in the queue
   await dragSwipe(page, 'right');
   await page.getByText('Stax + Zest INSTANT 2v4 vs FPX').waitFor({ timeout: 10000 });
   await waitForHdThumbnails(page);
   await waitForCardPlayback(page);
-  await sleep(950);
+  await sleep(550);
 
-  // 4. Open Playground and show the queued clips
-  await glideToLocator(page, playgroundTab, 680);
-  await sleep(220);
+  // 4. Open Playground and show the queued clips as a list
+  await glideToLocator(page, playgroundTab, 560);
+  await sleep(160);
   await clickHere(page);
   await page.getByRole('heading', { name: 'Your queue' }).waitFor({ timeout: 10000 });
-  await page.getByText('Emperor failed charisma check').waitFor({ timeout: 10000 });
+  await page.getByText('holy aim').waitFor({ timeout: 10000 });
   await page.getByText('Clip for Anna').waitFor({ timeout: 10000 });
-  await sleep(1700);
+  await sleep(1100);
 
   // 5. Analyze and leave the transcript on screen
   const analyzeBtn = page.getByRole('button', { name: 'Analyze' }).first();
   const uploadBtn = page.getByRole('button', { name: /Upload Shorts/ }).first();
-  await glideToLocator(page, analyzeBtn, 540);
-  await sleep(220);
+  await glideToLocator(page, analyzeBtn, 480);
+  await sleep(160);
   await clickHere(page);
   await page.getByText('Transcript ready').waitFor({ timeout: 10000 });
-  await sleep(1900);
+  await sleep(1300);
 
   // 6. Queue YouTube Shorts + TikTok and hold the success state
-  await glideToLocator(page, uploadBtn, 470);
-  await sleep(220);
-  await clickHere(page);
+  await uploadBtn.scrollIntoViewIfNeeded();
+  await glideToLocator(page, uploadBtn, 420);
+  await sleep(160);
+  await uploadBtn.click();
   await page.getByText('Queued for YouTube Shorts + TikTok.').waitFor({ timeout: 10000 });
-  await sleep(1900);
+  await sleep(1400);
 
   await session.send('Page.stopScreencast');
   await sleep(80);
   await browser.close();
 
   const span = raw.length ? raw[raw.length - 1].t - raw[0].t : 0;
-  const frames = densify(raw, FPS);
+  const frames = timedFrames(raw);
   if (frames.length < 16) {
     throw new Error(`too few frames: raw=${raw.length} span=${span.toFixed(3)}s picked=${frames.length}`);
   }
@@ -526,26 +569,35 @@ async function main() {
     ),
   );
 
+  const concatPath = path.join(FRAME_DIR, '_concat.txt');
+  const concatLines = [];
+  for (let i = 0; i < frames.length; i += 1) {
+    const name = `${String(i).padStart(4, '0')}.jpg`;
+    concatLines.push(`file '${name}'`);
+    concatLines.push(`duration ${frames[i].duration.toFixed(4)}`);
+  }
+  concatLines.push(`file '${String(frames.length - 1).padStart(4, '0')}.jpg'`);
+  await writeFile(concatPath, concatLines.join('\n'));
+
   const ffmpeg = findFfmpeg();
   const palette = path.join(FRAME_DIR, '_palette.png');
-  const seq = path.join(FRAME_DIR, '%04d.jpg');
-  const vf = `scale=${OUT_WIDTH}:${OUT_HEIGHT}:flags=lanczos,setsar=1,unsharp=3:3:0.5:3:3:0.0`;
+  const vf = `scale=${OUT_WIDTH}:${OUT_HEIGHT}:flags=lanczos,setsar=1`;
 
   const gen = spawnSync(
     ffmpeg,
     [
       '-y',
-      '-framerate',
-      String(FPS),
+      '-f',
+      'concat',
+      '-safe',
+      '0',
       '-i',
-      seq,
+      concatPath,
       '-vf',
-      // stats_mode=diff weights the palette toward pixels that actually change, which suits a
-      // capture where the clip is playing back inside the card for the whole run.
       `${vf},palettegen=max_colors=192:reserve_transparent=0:stats_mode=diff`,
       palette,
     ],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', cwd: FRAME_DIR },
   );
   if (gen.status !== 0) {
     console.error(gen.stdout, gen.stderr);
@@ -556,10 +608,12 @@ async function main() {
     ffmpeg,
     [
       '-y',
-      '-framerate',
-      String(FPS),
+      '-f',
+      'concat',
+      '-safe',
+      '0',
       '-i',
-      seq,
+      concatPath,
       '-i',
       palette,
       '-lavfi',
@@ -568,7 +622,7 @@ async function main() {
       '0',
       OUT_GIF,
     ],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', cwd: FRAME_DIR },
   );
   if (use.status !== 0) {
     console.error(use.stdout, use.stderr);
@@ -586,8 +640,8 @@ async function main() {
     `${span.toFixed(2)}s`,
     'frames',
     frames.length,
-    'fps',
-    FPS,
+    'native_fps',
+    span ? (raw.length / span).toFixed(1) : '0',
     `${OUT_WIDTH}x${OUT_HEIGHT}`,
   );
   // CLIPDER_KEEP_FRAMES=1 leaves the JPEGs in place for re-encoding experiments.

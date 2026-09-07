@@ -290,6 +290,23 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
     object-fit: cover !important;
     object-position: center center;
 }
+.clip-preview.demo-cover:hover {
+    transform: none;
+    box-shadow: none;
+}
+.clip-preview.demo-cover .video-player.demo-src {
+    opacity: 0 !important;
+    pointer-events: none;
+}
+.clip-preview.demo-cover .video-player.demo-canvas.playing {
+    opacity: 1;
+}
+.clip-preview.demo-cover .fullscreen-btn,
+.clip-preview.demo-cover .play-pause-btn,
+.clip-preview.demo-cover .volume-control,
+.clip-preview.demo-cover .progress-container {
+    display: none;
+}
 .video-player { z-index: 1; opacity: 0; transition: opacity 0.3s ease; pointer-events: none; }
 .video-player.playing { opacity: 1; pointer-events: auto; }
 .video-loading { 
@@ -438,10 +455,10 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
 .hint-text-main { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 3.5em; font-weight: 900; letter-spacing: 2px; }
 .hint-text-bubbly { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 1.6em; padding: 6px 20px; background: #fff; border-radius: 50px; color: #000; white-space: nowrap; box-shadow: 0 8px 0px rgba(0,0,0,0.2), 0 0 25px rgba(255,255,255,0.6); transform: rotate(-5deg); }
 .aura-strings { position: absolute; width: 250px; height: 250px; top: 50%; left: 50%; transform: translate(-50%, -50%); border-radius: 50%; filter: blur(30px); opacity: 0.5; z-index: -1; pointer-events: none; mix-blend-mode: screen; }
-.swipe-hint.left { left: -60px; color: #ff3e3e; }
+.swipe-hint.left { left: 12px; color: #ff3e3e; }
 .swipe-hint.left .hint-text-main { filter: drop-shadow(0 0 15px rgba(255, 62, 62, 0.8)); text-shadow: 2px 2px 0 #000; }
 .swipe-hint.left .aura-strings { background: radial-gradient(circle, #ff3e3e 0%, transparent 70%); }
-.swipe-hint.right { right: -60px; color: #2eff8c; }
+.swipe-hint.right { right: 12px; color: #2eff8c; }
 .swipe-hint.right .hint-text-main { filter: drop-shadow(0 0 15px rgba(46, 255, 140, 0.8)); text-shadow: 2px 2px 0 #000; }
 .swipe-hint.right .hint-text-bubbly { transform: rotate(5deg); }
 .swipe-hint.right .aura-strings { background: radial-gradient(circle, #2eff8c 0%, transparent 70%); }
@@ -1585,27 +1602,43 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
     border-color: rgba(236, 72, 153, 0.3);
 }
 
-.playground-msg-clip {
-    width: 260px;
-    border-radius: 12px;
-    overflow: hidden;
+.playground-active-clip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: rgba(139, 92, 246, 0.12);
     border: 1px solid rgba(139, 92, 246, 0.28);
-    background: rgba(0, 0, 0, 0.4);
 }
 
-.playground-msg-clip img {
-    display: block;
-    width: 100%;
-    aspect-ratio: 16 / 9;
+.playground-active-clip img {
+    width: 88px;
+    height: 50px;
     object-fit: cover;
+    border-radius: 6px;
+    flex-shrink: 0;
+    background: #000;
 }
 
-.playground-msg-clip-caption {
-    padding: 8px 12px;
-    font-size: 0.8em;
-    text-align: center;
-    color: rgba(255, 255, 255, 0.82);
-    background: rgba(30, 30, 40, 0.6);
+.playground-active-clip-copy {
+    min-width: 0;
+}
+
+.playground-active-clip-title {
+    font-size: 0.82em;
+    font-weight: 650;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.playground-active-clip-meta {
+    margin-top: 2px;
+    font-size: 0.72em;
+    color: rgba(255, 255, 255, 0.5);
 }
 
 .playground-chat-input-row {
@@ -1622,7 +1655,7 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
     display: flex;
     flex-direction: column;
     gap: 12px;
-    width: 320px;
+    width: 348px;
     flex-shrink: 0;
     min-height: 0;
     padding: 16px;
@@ -1658,12 +1691,9 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
     overflow-x: hidden;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    padding: 2px 2px 6px;
+    gap: 8px;
+    padding: 2px;
     scrollbar-width: thin;
-    /* Soft bottom edge so a partly visible card reads as "scroll for more". */
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
 }
 
 .queue-list::-webkit-scrollbar {
@@ -1690,7 +1720,8 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
 
 .queue-card {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    align-items: stretch;
     flex-shrink: 0;
     border-radius: 12px;
     overflow: hidden;
@@ -1711,7 +1742,7 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
 
 .queue-card-media {
     position: relative;
-    aspect-ratio: 16 / 9;
+    width: 128px;
     flex-shrink: 0;
     background: #000;
 }
@@ -1776,20 +1807,20 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
 .queue-card-body {
     display: flex;
     flex-direction: column;
-    gap: 7px;
-    padding: 9px 10px 10px;
+    justify-content: center;
+    gap: 5px;
+    min-width: 0;
+    padding: 8px 10px;
 }
 
 .queue-card-title {
     font-size: 0.78em;
     font-weight: 600;
-    line-height: 1.35;
+    line-height: 1.3;
     color: #fff;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
+    white-space: nowrap;
     overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .queue-card-meta {
@@ -1828,6 +1859,7 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
 .queue-card-actions {
     display: flex;
     gap: 6px;
+    margin-top: 2px;
 }
 
 .queue-btn {

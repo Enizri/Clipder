@@ -153,6 +153,9 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
   };
 
   const handleAnalyze = async (clip: QueueClip) => {
+    if (selectedClip?.id !== clip.id) {
+      setChatMessages([]);
+    }
     setSelectedClip(clip);
     setQueue((prev) => prev.map((c) => (c.id === clip.id ? { ...c, analyzing: true } : c)));
     setStatusMessage('Groq is transcribing and scoring this clip…');
@@ -351,26 +354,32 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
             }}
           >
             <div className="playground-chat-log" ref={chatLogRef}>
-              {chatMessages.length === 0 ? (
+              {selectedClip && (
+                <div className="playground-active-clip">
+                  <img src={selectedClip.thumbnail_url} alt="" draggable={false} />
+                  <div className="playground-active-clip-copy">
+                    <div className="playground-active-clip-title">{selectedClip.title}</div>
+                    <div className="playground-active-clip-meta">
+                      {selectedClip.creator_name || selectedClip.channel}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {chatMessages.filter((msg) => msg.type !== 'clip').length === 0 && !selectedClip ? (
                 <div className="playground-chat-empty">
                   Drag a clip from your queue, or click it, to start.
                 </div>
               ) : (
-                chatMessages.map((msg) => (
-                  <div
-                    key={msg._id}
-                    className={`playground-msg ${msg.role === 'user' ? 'is-user' : 'is-assistant'}`}
-                  >
-                    {msg.type === 'clip' && msg.thumbnail_url ? (
-                      <div className="playground-msg-clip">
-                        <img src={msg.thumbnail_url} alt="" draggable={false} />
-                        <div className="playground-msg-clip-caption">{msg.content}</div>
-                      </div>
-                    ) : (
+                chatMessages
+                  .filter((msg) => msg.type !== 'clip')
+                  .map((msg) => (
+                    <div
+                      key={msg._id}
+                      className={`playground-msg ${msg.role === 'user' ? 'is-user' : 'is-assistant'}`}
+                    >
                       <div className="playground-msg-bubble">{msg.content}</div>
-                    )}
-                  </div>
-                ))
+                    </div>
+                  ))
               )}
             </div>
 
@@ -466,19 +475,11 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
                     <div className="queue-card-title">{clip.title}</div>
                     <div className="queue-card-meta">
                       {clip.creator_name || clip.channel}
+                      {clip.analysisScore != null
+                        ? ` · Score ${Math.round(clip.analysisScore * 100)}%`
+                        : ''}
                       {clip.marked_for_export ? ' · YouTube Shorts + TikTok' : ''}
                     </div>
-
-                    {clip.transcript && (
-                      <div className="queue-card-analysis">
-                        {clip.analysisScore != null && (
-                          <span className="queue-card-score">
-                            Score {Math.round(clip.analysisScore * 100)}%
-                          </span>
-                        )}
-                        <p className="queue-card-transcript">{clip.transcript}</p>
-                      </div>
-                    )}
 
                     <div className="queue-card-actions">
                       <button
@@ -487,7 +488,6 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
                         data-testid={`btn-analyze-${clip.id}`}
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDropClip(clip);
                           void handleAnalyze(clip);
                         }}
                         disabled={Boolean(clip.analyzing) || Boolean(clip.transcript)}
@@ -500,7 +500,6 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
                         data-testid={`btn-upload-${clip.id}`}
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDropClip(clip);
                           void handleUpload(clip);
                         }}
                         disabled={clip.marked_for_export || Boolean(clip.uploading)}
