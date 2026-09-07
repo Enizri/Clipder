@@ -97,6 +97,7 @@ ClipApp/
 │       ├── clip.py              # Clip response/request schemas
 │       └── leaderboard.py       # Leaderboard response schemas
 ├── frontend/                     # React/TS + Vite
+│   ├── dist/                    # Generated production build; ignored by Git
 │   ├── src/
 │   │   ├── App.tsx
 │   │   ├── main.tsx
@@ -495,6 +496,14 @@ npm run dev
 
 # Run both concurrently (recommended)
 ```
+
+### Frontend Production Build
+
+Use Node.js 22+ and run `npm ci` followed by `npm run build` in `frontend/`.
+The generated `frontend/dist/` directory is ignored; do not commit build output.
+The Build Frontend workflow validates builds for frontend/workflow changes on
+pushes and pull requests to `main`, and supports manual runs. It never commits
+generated files.
 
 ### Testing
 ```bash
