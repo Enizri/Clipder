@@ -1,161 +1,194 @@
 import type {
   ClipsResponse,
   VideoUrlResponse,
-  ClipActionResponse,
+  VoteResponse,
   Comment,
-  LeaderboardClip,
+  LeaderboardEntry,
   AdminClip,
   QueueStatusResponse,
   ProcessStatusResponse,
   EmoteResponse,
-  GifResponse,
+  User,
+  Streamer,
+  SearchChannel,
 } from '../types';
 
-const API_BASE = '/api';
-const WS_BASE = `ws://${window.location.host}`;
+const getConfiguredApiOrigin = (): string | null => {
+  const raw = (import.meta as any).env?.VITE_API_ORIGIN as string | undefined;
+  const value = (raw || '').trim();
+  return value ? value.replace(/\/$/, '') : null;
+};
+
+// If VITE_API_ORIGIN is set use it; otherwise fall back to same-origin (proxy mode).
+const API_ORIGIN = getConfiguredApiOrigin();
+const API_BASE = API_ORIGIN ? `${API_ORIGIN}/api/v1` : '/api/v1';
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
+  const fullUrl = url.startsWith('http') ? url : `${API_BASE}${url}`;
+
   const token = localStorage.getItem('token');
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options?.headers,
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`API Error: ${response.status}`);
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options?.headers as Record<string, string>),
+  };
+
+  // Add auth header only for routes that require authentication
+  // Include /clips so optional-auth feed (My Streamers from follows) gets the JWT when present.
+  const requiresAuth = [
+    '/clips',
+    '/votes',
+    '/following',
+    '/admin',
+    '/ai',
+    '/ai-editor',
+    '/auth/me',
+  ].some((p) => fullUrl.includes(p));
+  if (token && requiresAuth) {
+    headers['Authorization'] = `Bearer ${token}`;
   }
-  return response.json();
+
+  const response = await fetch(fullUrl, { ...options, headers });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    let detail = `HTTP ${response.status}`;
+    try {
+      const json = JSON.parse(text);
+      detail = json.detail ?? json.message ?? detail;
+    } catch {
+      // response body was not JSON — use the status text
+    }
+    throw new Error(detail);
+  }
+
+  return response.json() as Promise<T>;
 }
 
 export const api = {
-  // Auth
-  login: (email: string, password: string): Promise<{ access_token: string; user: any }> =>
-    fetchJson('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    }),
+  // ===========================================================================
+  // AUTH — Twitch only
+  // ===========================================================================
 
-  register: (username: string, email: string, password: string): Promise<{ access_token: string; user: any }> =>
-    fetchJson('/auth/register', {
-      method: 'POST',
-      body: JSON.stringify({ username, email, password }),
-    }),
+  getMe: (): Promise<User> => fetchJson('/auth/me'),
 
-  getMe: (): Promise<any> => fetchJson('/auth/me'),
-
-  // Twitch OAuth
+  /** Returns Twitch OAuth URL — no token required. */
   getTwitchLoginUrl: (): Promise<{ authorization_url: string }> =>
     fetchJson('/auth/twitch/login'),
 
-  linkTwitch: (code: string): Promise<any> =>
-    fetchJson('/auth/twitch/link', {
-      method: 'POST',
-      body: JSON.stringify({ code }),
+  // ===========================================================================
+  // FOLLOWING
+  // ===========================================================================
+
+  getFollowing: (): Promise<Streamer[]> => fetchJson('/following'),
+
+  setForYouStreamers: (streamerIds: string[]): Promise<{ status: string; included_count: number }> =>
+    fetchJson('/following/for-you', {
+      method: 'PUT',
+      body: JSON.stringify({ streamer_ids: streamerIds }),
     }),
 
-  unlinkTwitch: (): Promise<any> =>
-    fetchJson('/auth/twitch/unlink', { method: 'DELETE' }),
+  addFollowing: (streamer_name: string, streamer_id: string): Promise<unknown> =>
+    fetchJson('/following', { method: 'POST', body: JSON.stringify({ streamer_name, streamer_id }) }),
 
-  // Following
-  getFollowing: (): Promise<any[]> => fetchJson('/api/following'),
+  removeFollowing: (streamer_id: string): Promise<unknown> =>
+    fetchJson(`/following/${streamer_id}`, { method: 'DELETE' }),
 
-  addFollowing: (streamer_name: string, streamer_id: string): Promise<any> =>
-    fetchJson('/api/following', {
-      method: 'POST',
-      body: JSON.stringify({ streamer_name, streamer_id }),
-    }),
+  getTwitchFollows: (): Promise<unknown[]> => fetchJson('/following/twitch/follows'),
 
-  removeFollowing: (streamer_id: string): Promise<any> =>
-    fetchJson(`/api/following/${streamer_id}`, { method: 'DELETE' }),
+  searchChannels: (query: string): Promise<SearchChannel[]> =>
+    fetchJson(`/following/search?q=${encodeURIComponent(query)}`),
 
-  getTwitchFollows: (): Promise<any[]> => fetchJson('/api/following/twitch/follows'),
+  syncFollows: (): Promise<{ status: string; added: number }> =>
+    fetchJson('/following/sync', { method: 'POST' }),
 
-  searchChannels: (query: string): Promise<any[]> =>
-    fetchJson(`/api/following/search?q=${encodeURIComponent(query)}`),
+  // ===========================================================================
+  // CLIPS
+  // ===========================================================================
 
-  syncFollows: (): Promise<any> =>
-    fetchJson('/api/following/sync', { method: 'POST' }),
+  getClips: (opts?: {
+    category?: string;
+    exploreCategory?: string | null;
+    /** Twitch clip IDs already swiped (guest) — merged server-side with vote history when logged in */
+    excludeClipIds?: string[];
+  }): Promise<ClipsResponse> => {
+    const category = opts?.category ?? 'My Streamers';
+    const params = new URLSearchParams({ category });
+    if (opts?.exploreCategory) params.set('explore_category', opts.exploreCategory);
+    const ex = opts?.excludeClipIds?.filter(Boolean) ?? [];
+    if (ex.length > 0) params.set('exclude_clip_ids', ex.slice(0, 300).join(','));
+    return fetchJson<ClipsResponse>(`/clips?${params.toString()}`);
+  },
 
-  // Clips
-  getClips: (category: string = 'My Streamers'): Promise<ClipsResponse> =>
-    fetchJson<ClipsResponse>(`${API_BASE}/clips?category=${encodeURIComponent(category)}`),
-
-  getCategories: (): Promise<{ categories: string[] }> =>
-    fetchJson(`${API_BASE}/categories`),
+  getCategories: (): Promise<{ categories: string[] }> => fetchJson('/categories'),
 
   getVideoUrl: (clipId: string): Promise<VideoUrlResponse> =>
-    fetchJson<VideoUrlResponse>(`${API_BASE}/clip/${clipId}/video-url`),
+    fetchJson<VideoUrlResponse>(`/clip/${clipId}/video-url`),
 
-  // Votes (authenticated)
-  likeClip: (clipId: string): Promise<ClipActionResponse> =>
-    fetchJson<ClipActionResponse>(`${API_BASE}/votes/clip/${clipId}/vote?vote_type=like`, {
-      method: 'POST',
-    }),
+  // ===========================================================================
+  // VOTES (authenticated users only)
+  // ===========================================================================
 
-  dislikeClip: (clipId: string): Promise<ClipActionResponse> =>
-    fetchJson<ClipActionResponse>(`${API_BASE}/votes/clip/${clipId}/vote?vote_type=dislike`, {
-      method: 'POST',
-    }),
+  likeClip: (clipId: string): Promise<VoteResponse> =>
+    fetchJson<VoteResponse>(`/votes/clip/${clipId}/vote?vote_type=like`, { method: 'POST' }),
+
+  dislikeClip: (clipId: string): Promise<VoteResponse> =>
+    fetchJson<VoteResponse>(`/votes/clip/${clipId}/vote?vote_type=dislike`, { method: 'POST' }),
 
   getClipVotes: (clipId: string): Promise<{ likes: number; dislikes: number }> =>
-    fetchJson(`${API_BASE}/votes/clip/${clipId}/votes`),
+    fetchJson(`/votes/clip/${clipId}/votes`),
 
-  // Legacy endpoints (still work without auth)
-  legacyLikeClip: (clipId: string): Promise<ClipActionResponse> =>
-    fetchJson<ClipActionResponse>(`${API_BASE}/clip/${clipId}/action`, {
-      method: 'POST',
-      body: JSON.stringify({ action: 'like' }),
-    }),
-
-  legacyDislikeClip: (clipId: string): Promise<ClipActionResponse> =>
-    fetchJson<ClipActionResponse>(`${API_BASE}/clip/${clipId}/action`, {
-      method: 'POST',
-      body: JSON.stringify({ action: 'dislike' }),
-    }),
+  // ===========================================================================
+  // COMMENTS
+  // ===========================================================================
 
   getComments: (clipId: string): Promise<Comment[]> =>
-    fetchJson<Comment[]>(`${API_BASE}/clip/${clipId}/comments`),
+    fetchJson<Comment[]>(`/clip/${clipId}/comments`),
 
   postComment: (clipId: string, text: string): Promise<{ status: string; comment: Comment }> =>
-    fetchJson(`${API_BASE}/clip/${clipId}/comments`, {
-      method: 'POST',
-      body: JSON.stringify({ text }),
-    }),
+    fetchJson(`/clip/${clipId}/comments`, { method: 'POST', body: JSON.stringify({ text }) }),
 
-  getLeaderboard: (): Promise<LeaderboardClip[]> =>
-    fetchJson<LeaderboardClip[]>(`${API_BASE}/leaderboard`),
+  // ===========================================================================
+  // LEADERBOARD
+  // ===========================================================================
+
+  getLeaderboard: (): Promise<{ month_key: string; clips: LeaderboardEntry[] }> =>
+    fetchJson<{ month_key: string; clips: LeaderboardEntry[] }>('/leaderboard/current'),
+
+  // ===========================================================================
+  // ADMIN
+  // ===========================================================================
 
   addToQueue: (clipId: string): Promise<QueueStatusResponse> =>
-    fetchJson<QueueStatusResponse>(`${API_BASE}/admin/queue`, {
+    fetchJson<QueueStatusResponse>('/admin/queue', {
       method: 'POST',
       body: JSON.stringify({ clip_id: clipId }),
     }),
 
   removeFromQueue: (clipId: string): Promise<QueueStatusResponse> =>
-    fetchJson<QueueStatusResponse>(`${API_BASE}/admin/remove`, {
+    fetchJson<QueueStatusResponse>('/admin/remove', {
       method: 'POST',
       body: JSON.stringify({ clip_id: clipId }),
     }),
 
-  getAcceptedClips: (): Promise<AdminClip[]> =>
-    fetchJson<AdminClip[]>(`${API_BASE}/accepted`),
+  getAcceptedClips: (): Promise<AdminClip[]> => fetchJson<AdminClip[]>('/admin/accepted'),
 
   processClips: (clipIds: string[]): Promise<ProcessStatusResponse> =>
-    fetchJson<ProcessStatusResponse>(`${API_BASE}/process`, {
+    fetchJson<ProcessStatusResponse>('/admin/process', {
       method: 'POST',
       body: JSON.stringify({ clip_ids: clipIds }),
     }),
 
+  // ===========================================================================
+  // EMOTES
+  // ===========================================================================
+
   getEmotes: (channel?: string): Promise<EmoteResponse> =>
-    fetchJson<EmoteResponse>(`${API_BASE}/emotes${channel ? `?channel=${encodeURIComponent(channel)}` : ''}`),
+    fetchJson<EmoteResponse>(`/emotes${channel ? `?channel=${encodeURIComponent(channel)}` : ''}`),
 
-  searchGifs: (query: string, limit?: number): Promise<GifResponse> =>
-    fetchJson<GifResponse>(`${API_BASE}/gifs?q=${encodeURIComponent(query)}${limit ? `&limit=${limit}` : ''}`),
+  // ===========================================================================
+  // AI EDITOR HISTORY (PRO)
+  // ===========================================================================
 
-  // AI Editor clip history (PRO only)
   saveClipToHistory: (data: {
     clip_id: string;
     clip_title: string;
@@ -167,55 +200,37 @@ export const api = {
     edited_title?: string;
     chat_messages?: Array<{ role: string; content: string; timestamp: string }>;
     edit_history?: Array<{ action: string; timestamp: string; before?: string; after?: string }>;
-  }) =>
-    fetchJson(`${API_BASE}/v1/ai-editor/history/save`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
+  }): Promise<unknown> =>
+    fetchJson('/ai-editor/history/save', { method: 'POST', body: JSON.stringify(data) }),
 
-  getUserClipHistory: (): Promise<any> =>
-    fetchJson(`${API_BASE}/v1/ai-editor/history`),
+  getUserClipHistory: (): Promise<{
+    history: Array<{
+      clip_id: string;
+      clip_title: string;
+      clip_url: string;
+      clip_channel: string;
+      thumbnail_url?: string | null;
+      edit_history?: string | null;
+    }>;
+    total: number;
+  }> => fetchJson('/ai-editor/history'),
 
-  deleteClipFromHistory: (clipId: string): Promise<any> =>
-    fetchJson(`${API_BASE}/v1/ai-editor/history/clip/${clipId}`, {
-      method: 'DELETE',
-    }),
+  deleteClipFromHistory: (clipId: string): Promise<unknown> =>
+    fetchJson(`/ai-editor/history/clip/${clipId}`, { method: 'DELETE' }),
 
-  clearAllHistory: (): Promise<any> =>
-    fetchJson(`${API_BASE}/v1/ai-editor/history/clear-all`, {
-      method: 'DELETE',
-    }),
+  markClipForExport: (
+    clipId: string,
+  ): Promise<{ status: string; message: string; marked_for_export: boolean }> =>
+    fetchJson(`/ai-editor/history/clip/${clipId}/export`, { method: 'POST' }),
+
+  chatForClip: (data: {
+    clip_title: string;
+    clip_channel: string;
+    user_message: string;
+    conversation_history: Array<{ role: string; content: string }>;
+  }): Promise<{ response: string; suggestions: string[] }> =>
+    fetchJson('/ai/chat', { method: 'POST', body: JSON.stringify(data) }),
+
+  clearAllHistory: (): Promise<unknown> =>
+    fetchJson('/ai-editor/history/clear-all', { method: 'DELETE' }),
 };
-
-// WebSocket for live leaderboard updates
-export function createLeaderboardSocket(onUpdate: (clips: LeaderboardClip[]) => void, onConnect?: () => void) {
-  const ws = new WebSocket(`${WS_BASE}/ws/leaderboard`);
-  
-  ws.onopen = () => {
-    console.log('WebSocket connected');
-    if (onConnect) {
-      onConnect();
-    }
-  };
-
-  ws.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      if (data.type === 'leaderboard_update') {
-        onUpdate(data.data);
-      }
-    } catch (e) {
-      console.error('Failed to parse WebSocket message:', e);
-    }
-  };
-
-  ws.onerror = (error) => {
-    console.error('WebSocket error:', error);
-  };
-
-  ws.onclose = () => {
-    console.log('WebSocket disconnected');
-  };
-
-  return ws;
-}

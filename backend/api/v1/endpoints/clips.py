@@ -1,24 +1,34 @@
-from typing import List, Dict, Any, Optional
+import asyncio
+import hashlib
+import logging
+from typing import List, Dict, Any, Optional, Set
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 import httpx
 
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
 from backend.core.state import AppState, get_state
+from backend.core.database import get_db
+from backend.core.config import get_settings
+from backend.api.v1.deps import get_current_user_optional
+from backend.models import Clip, User, UserStreamer, Vote
 from backend.schemas.clip import (
-    ClipsResponse,
     ClipResponse,
+    ClipsResponse,
     VideoUrlResponse,
-    ClipActionRequest,
-    ClipActionResponse,
     Comment,
     CommentResponse,
     CategoryResponse,
     EmoteResponse,
-    GifResponse,
 )
 
-router = APIRouter(prefix="/api", tags=["clips"])
+_clips_logger = logging.getLogger(__name__)
 
+router = APIRouter(prefix="/api/v1", tags=["clips"])
+
+# think of moving these to somewhere else
 BTTV_GLOBAL_EMOTES = [
     {
         "code": "PepePls",
@@ -319,13 +329,229 @@ TWITCH_GLOBAL_EMOTES = [
 ]
 
 
+def _yt_dlp_extract_sync(url: str) -> Optional[str]:
+    """Run yt-dlp synchronously — must be called via run_in_executor, never directly in async code."""
+    try:
+        import yt_dlp
+
+        ydl_opts: Dict[str, Any] = {
+            "format": "best[ext=mp4]/best",
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 10,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            video_url = info.get("url") if info else None
+            if not video_url and info:
+                for entry in (info.get("entries") or []):
+                    if entry and "url" in entry:
+                        return entry["url"]
+            return video_url
+    except Exception as e:
+        _clips_logger.warning("yt-dlp extraction failed for %s: %s", url, e)
+        return None
+
+
+def _db_clip_to_response(clip: Clip) -> ClipResponse:
+    """Convert a DB Clip row to a ClipResponse without needing AppState."""
+    return ClipResponse(
+        id=clip.twitch_clip_id,
+        title=clip.title,
+        url=clip.url,
+        thumbnail_url=clip.thumbnail_url or "",
+        view_count=clip.view_count,
+        creator_name=clip.creator_name,
+        # duration and channel are not stored in DB; provide safe defaults
+        duration=0.0,
+        created_at=clip.created_at.isoformat() if clip.created_at else "",
+        channel=clip.creator_name,
+        local_likes=clip.monthly_likes,
+        comment_count=0,
+    )
+
+
+def _default_explore_game_name() -> str:
+    """First configured Twitch category for My Streamers explore when none selected."""
+    settings = get_settings()
+    parts = [p.strip() for p in (settings.twitch_categories or "").split(",") if p.strip()]
+    return parts[0] if parts else "Just Chatting"
+
+
+def _parse_exclude_clip_ids_param(raw: Optional[str]) -> Set[str]:
+    """Twitch clip IDs from query string (guest seen-list). Capped so URLs stay bounded."""
+    if not raw or not raw.strip():
+        return set()
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    return set(parts[:300])
+
+
+async def _user_voted_twitch_ids(db: AsyncSession, user_id: int) -> Set[str]:
+    """All Twitch IDs the user already liked/disliked — feed should not repeat them."""
+    result = await db.execute(
+        select(Clip.twitch_clip_id)
+        .join(Vote, Vote.clip_id == Clip.id)
+        .where(Vote.user_id == user_id)
+    )
+    return {str(row[0]) for row in result.all() if row[0]}
+
+
+def _filter_twitch_queue_dicts(
+    queue: List[Dict[str, Any]], exclude: Set[str]
+) -> List[Dict[str, Any]]:
+    if not exclude:
+        return list(queue)
+    return [c for c in queue if str(c.get("id") or "") not in exclude]
+
+
+def _clip_dicts_for_foryou_channels(
+    clips: List[Dict[str, Any]],
+    allowed_channel_logins: Optional[List[str]],
+) -> List[Dict[str, Any]]:
+    """
+    For You feed only (`allowed_channel_logins` set): keep clips whose `channel` login
+    matches a selected streamer (case-insensitive). Stale cache rows from other channels drop out.
+    """
+    if allowed_channel_logins is None:
+        return clips
+    allow = {str(c).strip().lower() for c in allowed_channel_logins if str(c).strip()}
+    if not allow:
+        return []
+    return [
+        c
+        for c in clips
+        if str(c.get("channel") or "").strip().lower() in allow
+    ]
+
+
 @router.get("/clips", response_model=ClipsResponse)
 async def get_clips(
     category: str = "My Streamers",
-    state: AppState = Depends(get_state),
+    explore_category: Optional[str] = Query(
+        None,
+        description='When category is "My Streamers", Twitch game name to explore (e.g. Valorant).',
+    ),
+    exclude_clip_ids: Optional[str] = Query(
+        None,
+        description="Comma-separated Twitch clip IDs to omit (guest seen list; merged with "
+        "this user's votes when JWT present).",
+    ),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
 ) -> ClipsResponse:
-    clips = await state.fetch_clips(category)
-    return ClipsResponse(clips=clips, total=len(clips))
+    """
+    Serve clips from the in-memory Twitch queue (per-feed cache key).
+
+    - **For You**: clips only from followed channels where `include_in_for_you` is true (JWT
+      required; guests get an empty list).
+    - **My Streamers**: explore feed — clips for a Twitch **game** (`explore_category`).
+    - Any other `category` value is a game tab (e.g. Valorant) — same Twitch-by-game behavior.
+
+    Rows in Postgres are not tagged by game, so we do **not** fall back to generic top clips when
+    the game queue is cold (that caused wrong-category results). Exclusions keep swiped clips
+    from reappearing for guests (`exclude_clip_ids`) and logged-in users (vote history).
+    """
+    exclude_set = _parse_exclude_clip_ids_param(exclude_clip_ids)
+    if current_user is not None:
+        exclude_set = exclude_set | await _user_voted_twitch_ids(db, current_user.id)
+
+    storage_key: str = category
+    channel_names_override: Optional[List[str]] = None
+    fetch_category: str = category
+    shuffle_explore: bool = False
+
+    uid_part = str(current_user.id) if current_user is not None else "0"
+
+    if category == "For You":
+        if current_user is None:
+            return ClipsResponse(clips=[], total=0)
+        follow_result = await db.execute(
+            select(UserStreamer).where(
+                UserStreamer.user_id == current_user.id,
+                UserStreamer.include_in_for_you.is_(True),
+            )
+        )
+        follow_rows = list(follow_result.scalars().all())
+        if not follow_rows:
+            return ClipsResponse(clips=[], total=0)
+        channel_names_override = [r.streamer_name for r in follow_rows]
+        id_fingerprint = ",".join(sorted(r.streamer_id for r in follow_rows))
+        h = hashlib.sha256(id_fingerprint.encode()).hexdigest()[:16]
+        storage_key = f"__foryou_u{current_user.id}_{h}__"
+        fetch_category = "For You"
+
+    elif category == "My Streamers":
+        game = (
+            explore_category.strip()
+            if explore_category and explore_category.strip()
+            else _default_explore_game_name()
+        )
+        fetch_category = game
+        shuffle_explore = True
+        storage_key = f"__explore_ms_{game}_u{uid_part}__"
+
+    else:
+        # Sidebar game tab (e.g. "Valorant")
+        fetch_category = category
+        shuffle_explore = True
+        storage_key = f"__explore_tab_{category}_u{uid_part}__"
+
+    # --- Fast path: warm cache for this feed key ---
+    if AppState._instance is not None:
+        queue_raw = AppState._instance.category_queues.get(storage_key)
+        if queue_raw:
+            filtered = _filter_twitch_queue_dicts(queue_raw, exclude_set)
+            filtered = _clip_dicts_for_foryou_channels(filtered, channel_names_override)
+            if filtered:
+                state = AppState._instance
+                twitch_ids = [str(c["id"]) for c in filtered if c.get("id") is not None]
+                likes_map: Dict[str, int] = {}
+                if twitch_ids:
+                    likes_rows = await db.execute(
+                        select(Clip.twitch_clip_id, Clip.monthly_likes).where(
+                            Clip.twitch_clip_id.in_(twitch_ids)
+                        )
+                    )
+                    likes_map = {
+                        str(row[0]): int(row[1] or 0) for row in likes_rows.all()
+                    }
+                for clip in filtered:
+                    tid = str(clip.get("id") or "")
+                    clip["local_likes"] = likes_map.get(tid, 0)
+                    clip["comment_count"] = len(state.clip_comments.get(clip["id"], []))
+                return ClipsResponse(
+                    clips=[ClipResponse.model_validate(c) for c in filtered],
+                    total=len(filtered),
+                )
+            # Cache unusable (all excluded or wrong channels for For You) — refetch
+            AppState._instance.category_queues.pop(storage_key, None)
+
+    # --- Twitch fetch (cold cache or invalidated) ---
+    _clips_logger.info("Fetching Twitch clips (feed=%s, key=%s)", fetch_category, storage_key)
+    try:
+        state = await asyncio.wait_for(AppState.get_instance(), timeout=5.0)
+        clips = await asyncio.wait_for(
+            state.fetch_clips(
+                fetch_category,
+                cache_key=storage_key,
+                channel_names=channel_names_override,
+                shuffle_queue=shuffle_explore,
+            ),
+            timeout=25.0,
+        )
+    except asyncio.TimeoutError:
+        _clips_logger.warning("Timed out waiting for Twitch fetch")
+        clips = []
+    except Exception as exc:
+        _clips_logger.warning("Twitch fetch failed: %s", exc)
+        clips = []
+
+    filtered_out = _filter_twitch_queue_dicts(clips, exclude_set)
+    filtered_out = _clip_dicts_for_foryou_channels(filtered_out, channel_names_override)
+    return ClipsResponse(
+        clips=[ClipResponse.model_validate(c) for c in filtered_out],
+        total=len(filtered_out),
+    )
 
 
 @router.get("/categories", response_model=CategoryResponse)
@@ -334,25 +560,145 @@ async def get_categories(state: AppState = Depends(get_state)) -> CategoryRespon
     return CategoryResponse(categories=categories)
 
 
+@router.get("/clip/{clip_id}/video-stream")
+async def get_clip_video_stream(
+    clip_id: str,
+    state: AppState = Depends(get_state),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream video file with proper CORS headers to bypass frontend CORS issues."""
+    import logging
+    from fastapi.responses import StreamingResponse
+
+    logging.info(f"📥 get_clip_video_stream called with clip_id: {clip_id}")
+
+    try:
+        clip_pk = int(clip_id)
+    except ValueError:
+        clip_pk = None
+
+    clip = None
+    if clip_pk is not None:
+        clip = await db.get(Clip, clip_pk)
+
+    if not clip:
+        result = await db.execute(select(Clip).where(Clip.twitch_clip_id == clip_id))
+        clip = result.scalar_one_or_none()
+
+    if not clip or not clip.url:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Extract video URL using yt-dlp
+    try:
+        import yt_dlp
+
+        ydl_opts: Dict[str, Any] = {
+            "format": "best[ext=mp4]/best",
+            "quiet": True,
+            "no_warnings": True,
+        }
+
+        video_url = None
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(clip.url, download=False)
+            video_url = info.get("url") if info else None
+            if not video_url and info:
+                entries = info.get("entries")
+                if entries:
+                    for entry in entries:
+                        if entry and "url" in entry:
+                            video_url = entry["url"]
+                            break
+
+        if not video_url:
+            raise HTTPException(status_code=404, detail="Could not extract video URL")
+
+        # Proxy stream from video_url
+        async def stream_generator():
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("GET", video_url) as response:
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
+
+        return StreamingResponse(
+            stream_generator(),
+            media_type="video/mp4",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            },
+        )
+
+    except Exception as e:
+        logging.error(f"❌ Failed to stream video: {e}")
+        raise HTTPException(status_code=500, detail="Failed to stream video")
+
+
 @router.get("/clip/{clip_id}/video-url")
 async def get_clip_video_url(
     clip_id: str,
     state: AppState = Depends(get_state),
+    db: AsyncSession = Depends(get_db),
 ) -> VideoUrlResponse:
-    result = await state.get_video_url(clip_id)
-    if "error" in result:
-        raise HTTPException(status_code=404, detail=result["error"])
-    return VideoUrlResponse(**result)
+    """
+    Return a playable video URL for a clip.
 
+    Resolution order:
+    1. DB clip + in-DB URL cache (fastest)
+    2. DB clip + yt-dlp extraction via thread-pool (non-blocking)
+    3. In-memory AppState cache (legacy fallback)
+    """
+    from backend.models.clip_video_cache import ClipVideoCache
 
-@router.post("/clip/{clip_id}/action", response_model=ClipActionResponse)
-async def clip_action(
-    clip_id: str,
-    action_data: ClipActionRequest,
-    state: AppState = Depends(get_state),
-) -> ClipActionResponse:
-    result = await state.action_clip(clip_id, action_data.action)
-    return ClipActionResponse(**result)
+    # --- Resolve DB clip (PK int or Twitch slug) ---
+    clip = None
+    try:
+        clip = await db.get(Clip, int(clip_id))
+    except (ValueError, Exception):
+        pass
+    if not clip:
+        result = await db.execute(select(Clip).where(Clip.twitch_clip_id == clip_id))
+        clip = result.scalar_one_or_none()
+
+    if clip:
+        # Check DB cache first
+        cache_result = await db.execute(
+            select(ClipVideoCache).where(ClipVideoCache.clip_id == clip.id)
+        )
+        cached = cache_result.scalar_one_or_none()
+        if cached:
+            _clips_logger.debug("Video URL cache hit for clip %s", clip_id)
+            return VideoUrlResponse(video_url=cached.video_url, title=cached.title or clip.title)
+
+        # Cache miss — run yt-dlp in a thread pool so the event loop stays free
+        _clips_logger.info("Video URL cache miss for clip %s, extracting...", clip_id)
+        loop = asyncio.get_event_loop()
+        video_url: Optional[str] = await loop.run_in_executor(
+            None, _yt_dlp_extract_sync, clip.url
+        )
+
+        # Fall back to the Twitch clip page URL if yt-dlp returned nothing
+        if not video_url:
+            video_url = clip.url
+
+        # Persist to cache (best-effort; don't fail the request if it errors)
+        try:
+            new_cache = ClipVideoCache(clip_id=clip.id, video_url=video_url, title=clip.title)
+            db.add(new_cache)
+            await db.commit()
+        except Exception as cache_err:
+            await db.rollback()
+            _clips_logger.debug("Failed to cache video URL for clip %s: %s", clip_id, cache_err)
+
+        return VideoUrlResponse(video_url=video_url, title=clip.title)
+
+    # Clip not in DB yet — try in-memory AppState (handles clips loaded this session)
+    legacy = await state.get_video_url(clip_id)
+    if "error" not in legacy:
+        return VideoUrlResponse(**legacy)
+
+    raise HTTPException(status_code=404, detail="Could not resolve video URL for this clip")
 
 
 @router.get("/clip/{clip_id}/comments", response_model=List[Comment])
@@ -360,8 +706,9 @@ async def get_comments(
     clip_id: str,
     state: AppState = Depends(get_state),
 ) -> List[Comment]:
-    comments = await state.get_comments(clip_id)
-    return comments
+    raw = await state.get_comments(clip_id)
+    # AppState stores plain dicts; response contract is List[Comment].
+    return [Comment.model_validate(c) for c in raw]
 
 
 class PostCommentRequest(BaseModel):
@@ -387,12 +734,6 @@ async def post_comment(
 
 @router.get("/emotes", response_model=EmoteResponse)
 async def get_emotes(channel: str = Query(default="")) -> EmoteResponse:
-    emotes = {
-        "twitch": TWITCH_GLOBAL_EMOTES,
-        "bttv": BTTV_GLOBAL_EMOTES,
-        "7tv": SEVENTV_EMOTES,
-    }
-
     channel_emotes: List[Dict[str, str]] = []
     if channel:
         try:
@@ -439,46 +780,3 @@ async def get_emotes(channel: str = Query(default="")) -> EmoteResponse:
     )
 
 
-@router.get("/gifs", response_model=GifResponse)
-async def search_gifs(
-    q: str = Query(default="", min_length=1), limit: int = Query(default=20, le=50)
-) -> GifResponse:
-    gifs: List[Dict[str, Any]] = []
-
-    if q:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    "https://api.giphy.com/v1/gifs/search",
-                    params={
-                        "api_key": "dc6zaTOxFJmzC",
-                        "q": q,
-                        "limit": limit,
-                        "rating": "pg-13",
-                    },
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    for gif in data.get("data", []):
-                        gifs.append(
-                            {
-                                "id": gif.get("id", ""),
-                                "title": gif.get("title", ""),
-                                "url": gif.get("images", {})
-                                .get("original", {})
-                                .get("url", ""),
-                                "preview": gif.get("images", {})
-                                .get("fixed_height_small", {})
-                                .get("url", ""),
-                                "width": gif.get("images", {})
-                                .get("original", {})
-                                .get("width", ""),
-                                "height": gif.get("images", {})
-                                .get("original", {})
-                                .get("height", ""),
-                            }
-                        )
-        except Exception:
-            pass
-
-    return GifResponse(gifs=gifs)

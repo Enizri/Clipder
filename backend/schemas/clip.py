@@ -1,5 +1,5 @@
-from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field
+from typing import Dict, List, Optional
+from pydantic import BaseModel, ConfigDict
 
 
 class ClipBase(BaseModel):
@@ -15,11 +15,10 @@ class ClipBase(BaseModel):
 
 
 class ClipResponse(ClipBase):
+    model_config = ConfigDict(from_attributes=True)
+
     local_likes: int = 0
     comment_count: int = 0
-
-    class Config:
-        from_attributes = True
 
 
 class ClipsResponse(BaseModel):
@@ -31,15 +30,6 @@ class VideoUrlResponse(BaseModel):
     video_url: Optional[str] = None
     title: Optional[str] = None
     error: Optional[str] = None
-
-
-class ClipActionRequest(BaseModel):
-    action: str = Field(..., pattern="^(like|dislike)$")
-
-
-class ClipActionResponse(BaseModel):
-    status: str
-    current_score: int
 
 
 class Comment(BaseModel):
@@ -70,14 +60,3 @@ class EmoteResponse(BaseModel):
     channel: List[Dict[str, str]] = []
 
 
-class GifItem(BaseModel):
-    id: str
-    title: str
-    url: str
-    preview: str
-    width: str
-    height: str
-
-
-class GifResponse(BaseModel):
-    gifs: List[Dict[str, Any]]

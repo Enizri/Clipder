@@ -1,18 +1,23 @@
-import sys
-from pathlib import Path
+from starlette.websockets import WebSocket
+from starlette.datastructures import State
 from typing import Dict, List, Optional, Any, Set
+from datetime import datetime, timezone
 import asyncio
 import logging
-from fastapi import WebSocket
+import random
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from backend.models.clip import Clip
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
     _instance: Optional["ConnectionManager"] = None
 
     def __init__(self):
-        self.active_connections: Set[WebSocket] = set()
+        self.active_connections: Set[WebSocket] = set[WebSocket[State]]()
 
     @classmethod
     def get_instance(cls) -> "ConnectionManager":
@@ -32,13 +37,35 @@ class ConnectionManager:
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to broadcast to client: {e}")
                 disconnected.add(connection)
         for conn in disconnected:
             self.active_connections.discard(conn)
 
+    async def broadcast_leaderboard_changes(self, changes: Dict[str, Any]) -> None:
+        """
+        Broadcast delta-only leaderboard updates (only when rankings change).
 
-from core import (
+        Called by the 5-second job only if rankings have changed.
+        Sends only the changes, not the full list, to save bandwidth.
+
+        Args:
+            changes: Dictionary with:
+                - clips_entered: New clips that entered top 10
+                - clips_exited: Clips that fell out of top 10
+                - position_changes: Clips that moved ranks
+                - top_10: Full current top 10 (for client verification)
+        """
+        message = {
+            "type": "leaderboard_update",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "changes": changes,
+        }
+        await self.broadcast(message)
+
+
+from backend.engine import (  # noqa: E402
     Config,
     TwitchClient,
     StateManager as CoreStateManager,
@@ -47,8 +74,6 @@ from core import (
     YouTubeUploader,
     TikTokUploader,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class AppState:
@@ -80,54 +105,65 @@ class AppState:
         if cls._instance is None:
             async with cls._lock:
                 if cls._instance is None:
-                    cls._instance = cls()
+                    # TwitchClient.__init__ makes blocking sync HTTP calls (engine.py is
+                    # immutable). Run the whole constructor in a thread pool so we never
+                    # stall the event loop while holding the asyncio.Lock.
+                    loop = asyncio.get_event_loop()
+                    cls._instance = await loop.run_in_executor(None, cls)
+        assert cls._instance is not None
         return cls._instance
+
+    def _fetch_clips_for_channel_list(
+        self, channel_names: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Round-robin recent clips across the given Twitch login names (lowercase ok)."""
+        if not self.bot_initialized:
+            return []
+
+        clips_by_channel: Dict[str, List[Dict[str, Any]]] = {}
+        for channel in channel_names:
+            broadcaster_id = self.twitch_client.get_broadcaster_id(channel)
+            if broadcaster_id:
+                all_clips = self.twitch_client.get_recent_clips(
+                    broadcaster_id, hours_back=72, fetch_count=100
+                )
+                channel_clips: List[Dict[str, Any]] = []
+                for clip in all_clips:
+                    clip_data: Dict[str, Any] = {
+                        "id": clip["id"],
+                        "title": clip["title"],
+                        "url": clip["url"],
+                        "thumbnail_url": clip["thumbnail_url"],
+                        "view_count": clip["view_count"],
+                        "creator_name": clip["creator_name"],
+                        "duration": clip["duration"],
+                        "created_at": clip["created_at"],
+                        "channel": channel,
+                    }
+                    self.clip_metadata_store[clip["id"]] = clip_data
+                    if (
+                        not self.core_state_manager.is_processed(clip["id"])
+                        and clip["id"] not in self.admin_upload_queue
+                        and clip["id"] not in self.clip_scores
+                    ):
+                        channel_clips.append(clip_data)
+                channel_clips.sort(key=lambda x: x["view_count"], reverse=True)
+                clips_by_channel[channel] = channel_clips
+
+        max_per_channel = 10
+        final_queue: List[Dict[str, Any]] = []
+        channel_queues = {
+            ch: clips[:max_per_channel] for ch, clips in clips_by_channel.items()
+        }
+        while any(channel_queues.values()):
+            for channel in channel_names:
+                if channel in channel_queues and channel_queues[channel]:
+                    final_queue.append(channel_queues[channel].pop(0))
+        return final_queue
 
     def _fetch_clips_for_category(self, category_name: str) -> List[Dict[str, Any]]:
         if not self.bot_initialized:
             return []
-
-        if category_name == "My Streamers":
-            clips_by_channel: Dict[str, List[Dict[str, Any]]] = {}
-            for channel in self.config.twitch_channels:
-                broadcaster_id = self.twitch_client.get_broadcaster_id(channel)
-                if broadcaster_id:
-                    all_clips = self.twitch_client.get_recent_clips(
-                        broadcaster_id, hours_back=72, fetch_count=100
-                    )
-                    channel_clips: List[Dict[str, Any]] = []
-                    for clip in all_clips:
-                        clip_data: Dict[str, Any] = {
-                            "id": clip["id"],
-                            "title": clip["title"],
-                            "url": clip["url"],
-                            "thumbnail_url": clip["thumbnail_url"],
-                            "view_count": clip["view_count"],
-                            "creator_name": clip["creator_name"],
-                            "duration": clip["duration"],
-                            "created_at": clip["created_at"],
-                            "channel": channel,
-                        }
-                        self.clip_metadata_store[clip["id"]] = clip_data
-                        if (
-                            not self.core_state_manager.is_processed(clip["id"])
-                            and clip["id"] not in self.admin_upload_queue
-                            and clip["id"] not in self.clip_scores
-                        ):
-                            channel_clips.append(clip_data)
-                    channel_clips.sort(key=lambda x: x["view_count"], reverse=True)
-                    clips_by_channel[channel] = channel_clips
-
-            max_per_channel = 10
-            final_queue: List[Dict[str, Any]] = []
-            channel_queues = {
-                ch: clips[:max_per_channel] for ch, clips in clips_by_channel.items()
-            }
-            while any(channel_queues.values()):
-                for channel in self.config.twitch_channels:
-                    if channel in channel_queues and channel_queues[channel]:
-                        final_queue.append(channel_queues[channel].pop(0))
-            return final_queue
 
         else:
             if not hasattr(self.twitch_client, "get_game_id"):
@@ -146,7 +182,7 @@ class AppState:
 
             valid_clips: List[Dict[str, Any]] = []
             for clip in all_clips:
-                clip_data: Dict[str, Any] = {
+                clip_data = {
                     "id": clip["id"],
                     "title": clip["title"],
                     "url": clip["url"],
@@ -168,17 +204,144 @@ class AppState:
             valid_clips.sort(key=lambda x: x["view_count"], reverse=True)
             return valid_clips[:30]
 
-    async def fetch_clips(self, category: str = "My Streamers") -> List[Dict[str, Any]]:
-        if category not in self.category_queues or not self.category_queues[category]:
-            self.category_queues[category] = self._fetch_clips_for_category(category)
-
-        queue = self.category_queues[category]
-
+    def _apply_clip_scores_to_queue(self, queue: List[Dict[str, Any]]) -> None:
+        """Fallback when DB is unavailable — legacy in-memory tallies only."""
         for clip in queue:
             clip["local_likes"] = self.clip_scores.get(clip["id"], 0)
             clip["comment_count"] = len(self.clip_comments.get(clip["id"], []))
 
+    async def _apply_db_likes_to_queue(
+        self, db: AsyncSession, queue: List[Dict[str, Any]]
+    ) -> None:
+        """Swipe counts live in Postgres (`clips.monthly_likes`) — keep cards in sync."""
+        twitch_ids = [str(c["id"]) for c in queue if c.get("id") is not None]
+        likes_map: Dict[str, int] = {}
+        if twitch_ids:
+            result = await db.execute(
+                select(Clip.twitch_clip_id, Clip.monthly_likes).where(
+                    Clip.twitch_clip_id.in_(twitch_ids)
+                )
+            )
+            likes_map = {str(row[0]): int(row[1] or 0) for row in result.all()}
+        for clip in queue:
+            tid = str(clip.get("id") or "")
+            clip["local_likes"] = likes_map.get(tid, 0)
+            clip["comment_count"] = len(self.clip_comments.get(clip["id"], []))
+
+    async def fetch_clips(
+        self,
+        category: str = "My Streamers",
+        *,
+        cache_key: Optional[str] = None,
+        channel_names: Optional[List[str]] = None,
+        shuffle_queue: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        cache_key: Separate in-memory queue key (e.g. per-user "For You").
+        channel_names: When set, fetch clips only for these channels instead of
+            interpreting `category` as a Twitch game/category name.
+        shuffle_queue: Randomize order after fetch (explore-style game feeds).
+        """
+        storage_key = cache_key or category
+        fresh_fetch = False
+
+        if storage_key not in self.category_queues or not self.category_queues[storage_key]:
+            loop = asyncio.get_event_loop()
+
+            def _sync_fetch() -> List[Dict[str, Any]]:
+                if channel_names is not None:
+                    return self._fetch_clips_for_channel_list(channel_names)
+                return self._fetch_clips_for_category(category)
+
+            try:
+                queue_result = await asyncio.wait_for(
+                    loop.run_in_executor(None, _sync_fetch),
+                    timeout=30.0,
+                )
+                if shuffle_queue and queue_result:
+                    queue_result = list(queue_result)
+                    random.shuffle(queue_result)
+                self.category_queues[storage_key] = queue_result
+            except asyncio.TimeoutError:
+                logger.warning("fetch_clips timed out after 30 s for key '%s'", storage_key)
+                self.category_queues[storage_key] = []
+            except Exception as exc:
+                logger.warning("fetch_clips failed for key '%s': %s", storage_key, exc)
+                self.category_queues[storage_key] = []
+            fresh_fetch = True
+
+        queue = self.category_queues[storage_key]
+
+        try:
+            from backend.core.database import async_session_maker
+
+            if async_session_maker is not None:
+                async with async_session_maker() as db:
+                    if fresh_fetch and queue:
+                        await self._upsert_clips(db, queue)
+                    await self._apply_db_likes_to_queue(db, queue)
+            else:
+                self._apply_clip_scores_to_queue(queue)
+        except Exception as e:
+            logger.warning("Clip DB hydrate/upsert failed in fetch_clips: %s", e)
+            self._apply_clip_scores_to_queue(queue)
+
         return queue
+
+    async def _upsert_clips(self, db: AsyncSession, clips: List[Dict[str, Any]]) -> None:
+        from datetime import datetime, timezone
+
+        current_month = datetime.now(timezone.utc).strftime("%Y-%m")
+        changed = False
+        for clip_data in clips:
+            twitch_clip_id = str(clip_data.get("id") or "").strip()
+            if not twitch_clip_id:
+                continue
+
+            result = await db.execute(select(Clip).where(Clip.twitch_clip_id == twitch_clip_id))
+            clip = result.scalar_one_or_none()
+
+            if clip is None:
+                clip = Clip(
+                    twitch_clip_id=twitch_clip_id,
+                    title=clip_data.get("title") or "",
+                    url=clip_data.get("url") or "",
+                    thumbnail_url=clip_data.get("thumbnail_url") or "",
+                    view_count=int(clip_data.get("view_count") or 0),
+                    creator_name=clip_data.get("creator_name") or "",
+                    month_key=current_month,
+                )
+                db.add(clip)
+                changed = True
+                continue
+
+            # Update missing metadata (don’t stomp existing values with empties)
+            new_url = (clip_data.get("url") or "").strip()
+            if new_url and not (clip.url or "").strip():
+                clip.url = new_url
+                changed = True
+            new_title = (clip_data.get("title") or "").strip()
+            if new_title and not (clip.title or "").strip():
+                clip.title = new_title
+                changed = True
+            new_thumb = (clip_data.get("thumbnail_url") or "").strip()
+            if new_thumb and not (clip.thumbnail_url or "").strip():
+                clip.thumbnail_url = new_thumb
+                changed = True
+            new_creator = (clip_data.get("creator_name") or "").strip()
+            if new_creator and not (clip.creator_name or "").strip():
+                clip.creator_name = new_creator
+                changed = True
+            try:
+                new_views = int(clip_data.get("view_count") or 0)
+                if new_views and (clip.view_count or 0) == 0:
+                    clip.view_count = new_views
+                    changed = True
+            except Exception:
+                pass
+
+        if changed:
+            await db.commit()
 
     async def get_clip(self, clip_id: str) -> Optional[Dict[str, Any]]:
         clip = self.clip_metadata_store.get(clip_id)
@@ -188,6 +351,8 @@ class AppState:
         return clip
 
     async def get_video_url(self, clip_id: str) -> Dict[str, Any]:
+        import asyncio
+
         if clip_id in self.video_url_cache:
             cached_url = self.video_url_cache[clip_id]
             if cached_url:
@@ -196,8 +361,8 @@ class AppState:
                     "video_url": cached_url,
                     "title": clip.get("title", "") if clip else "",
                 }
-            elif cached_url is None:
-                return {"error": "No video URL found"}
+            # None in cache means we already tried and failed
+            return {"error": "No video URL found"}
 
         clip = self.clip_metadata_store.get(clip_id)
         if not clip:
@@ -206,55 +371,70 @@ class AppState:
         try:
             import yt_dlp
 
-            ydl_opts: Dict[str, Any] = {
-                "format": "best[ext=mp4]/best",
-                "quiet": True,
-                "no_warnings": True,
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(clip["url"], download=False)
-
-                video_url = info.get("url") if info else None
-
-                if not video_url and info:
-                    entries = info.get("entries")
-                    if entries:
-                        for entry in entries:
+            def _extract() -> Optional[str]:
+                ydl_opts: Dict[str, Any] = {
+                    "format": "best[ext=mp4]/best",
+                    "quiet": True,
+                    "no_warnings": True,
+                    "socket_timeout": 10,
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(clip["url"], download=False)
+                    url = info.get("url") if info else None
+                    if not url and info:
+                        for entry in (info.get("entries") or []):
                             if entry and "url" in entry:
-                                video_url = entry["url"]
-                                break
+                                return entry["url"]
+                    return url
 
-                if video_url:
-                    self.video_url_cache[clip_id] = video_url
-                    return {
-                        "video_url": video_url,
-                        "title": clip["title"],
-                    }
+            # Run blocking yt-dlp in thread pool to keep the event loop free
+            loop = asyncio.get_event_loop()
+            video_url: Optional[str] = await loop.run_in_executor(None, _extract)
 
-                self.video_url_cache[clip_id] = None
-                return {"error": "No video URL found"}
+            if video_url:
+                self.video_url_cache[clip_id] = video_url
+                return {"video_url": video_url, "title": clip["title"]}
+
+            self.video_url_cache[clip_id] = None
+            return {"error": "No video URL found"}
         except Exception as e:
             self.video_url_cache[clip_id] = None
             return {"error": str(e)}
 
     async def action_clip(self, clip_id: str, action: str) -> Dict[str, Any]:
-        if action == "like":
-            self.clip_scores[clip_id] = self.clip_scores.get(clip_id, 0) + 1
+        """Handle legacy clip action (like/dislike swiping).
 
-            leaderboard = await self.get_leaderboard()
-            await self.ws_manager.broadcast(
-                {"type": "leaderboard_update", "data": leaderboard[:10]}
-            )
+        This is the legacy endpoint - swiping cards call this.
+        Modern code should use the votes.py endpoints instead.
+        """
+        try:
+            if action == "like":
+                self.clip_scores[clip_id] = self.clip_scores.get(clip_id, 0) + 1
 
-        for cat in self.category_queues:
-            self.category_queues[cat] = [
-                c for c in self.category_queues[cat] if c["id"] != clip_id
-            ]
+                leaderboard = await self.get_leaderboard()
+                await self.ws_manager.broadcast(
+                    {"type": "leaderboard_update", "data": leaderboard[:10]}
+                )
+            elif action == "dislike":
+                # Just remove the clip from queue
+                pass
 
-        return {
-            "status": "voted",
-            "current_score": self.clip_scores.get(clip_id, 0),
-        }
+            # Remove clip from all category queues (swiped)
+            for cat in self.category_queues:
+                self.category_queues[cat] = [
+                    c for c in self.category_queues[cat] if c["id"] != clip_id
+                ]
+
+            return {
+                "status": "voted",
+                "current_score": self.clip_scores.get(clip_id, 0),
+            }
+        except Exception as e:
+            logger.error(f"Error in action_clip: {e}")
+            return {
+                "status": "error",
+                "current_score": self.clip_scores.get(clip_id, 0),
+            }
 
     async def get_comments(self, clip_id: str) -> List[Dict[str, str]]:
         return self.clip_comments.get(clip_id, [])
@@ -283,6 +463,22 @@ class AppState:
                 ranked_clips.append(clip_info)
 
         ranked_clips.sort(key=lambda x: x["local_likes"], reverse=True)
+
+        # Add rank numbers to each clip for frontend
+        for idx, clip in enumerate(ranked_clips):
+            clip["rank"] = idx + 1
+            # Ensure required fields exist
+            if "clip_id" not in clip and "id" in clip:
+                clip["clip_id"] = clip["id"]
+            if "score" not in clip:
+                clip["score"] = clip.get("local_likes", 0)
+            if "likes" not in clip:
+                clip["likes"] = clip.get("local_likes", 0)
+            if "title" not in clip:
+                clip["title"] = ""
+            if "creator" not in clip and "creator_name" in clip:
+                clip["creator"] = clip["creator_name"]
+
         return ranked_clips
 
     async def add_to_queue(self, clip_id: str) -> Dict[str, str]:

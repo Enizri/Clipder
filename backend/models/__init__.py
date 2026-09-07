@@ -4,5 +4,20 @@ from backend.models.clip import Clip
 from backend.models.vote import Vote, VoteType
 from backend.models.user_streamer import UserStreamer
 from backend.models.user_clip_history import UserClipHistory
+from backend.models.leaderboard_snapshot import LeaderboardSnapshot
+from backend.models.leaderboard_monthly_summary import LeaderboardMonthlySummary
+from backend.models.clip_video_cache import ClipVideoCache
 
-__all__ = ["Base", "User", "UserRole", "Clip", "Vote", "VoteType", "UserStreamer", "UserClipHistory"]
+__all__ = [
+    "Base",
+    "User",
+    "UserRole",
+    "Clip",
+    "Vote",
+    "VoteType",
+    "UserStreamer",
+    "UserClipHistory",
+    "LeaderboardSnapshot",
+    "LeaderboardMonthlySummary",
+    "ClipVideoCache",
+]

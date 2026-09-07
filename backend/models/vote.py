@@ -1,10 +1,9 @@
+import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, Integer, DateTime, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Integer, DateTime, ForeignKey, Enum as SQLEnum, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-import enum
 
 from backend.core.database import Base
 
@@ -29,9 +28,13 @@ class Vote(Base):
         Integer, ForeignKey("clips.id"), nullable=False, index=True
     )
     vote_type: Mapped[VoteType] = mapped_column(SQLEnum(VoteType), nullable=False)
+
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    # One vote per user per clip
+    __table_args__ = (UniqueConstraint("user_id", "clip_id", name="unique_vote"),)
 
     user: Mapped["User"] = relationship("User", back_populates="votes")
     clip: Mapped["Clip"] = relationship("Clip", back_populates="votes")

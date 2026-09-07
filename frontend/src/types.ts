@@ -1,3 +1,7 @@
+// ==============================================================================
+// CLIP TYPES
+// ==============================================================================
+
 export interface Clip {
   id: string;
   title: string;
@@ -23,19 +27,15 @@ export interface VideoUrlResponse {
   error?: string;
 }
 
-export interface ClipActionResponse {
+export interface VoteResponse {
   status: string;
+  clip_id: number;
+  current_likes: number;
+  current_dislikes: number;
   current_score: number;
 }
 
-export interface Comment {
-  user: string;
-  text: string;
-  timestamp: string;
-}
-
-export interface LeaderboardClip extends Clip {}
-
+// Clip as stored in the AI editor queue (no duration/channel fields from the swipe feed)
 export interface AdminClip {
   id: string;
   title: string;
@@ -48,13 +48,34 @@ export interface AdminClip {
   channel: string;
 }
 
-export interface QueueStatusResponse {
-  status: string;
+// ==============================================================================
+// LEADERBOARD TYPES
+// ==============================================================================
+
+// Shape returned by the /leaderboard WebSocket and REST endpoint
+export interface LeaderboardEntry {
+  rank: number;
+  clip_id: number;
+  score: number;
+  likes: number;
+  title: string;
+  creator: string;
+  thumbnail_url: string;
 }
 
-export interface ProcessStatusResponse {
-  status: string;
+// ==============================================================================
+// COMMENT TYPES
+// ==============================================================================
+
+export interface Comment {
+  user: string;
+  text: string;
+  timestamp: string;
 }
+
+// ==============================================================================
+// EMOTE TYPES
+// ==============================================================================
 
 export interface EmoteItem {
   code: string;
@@ -69,25 +90,15 @@ export interface EmoteResponse {
   channel: EmoteItem[];
 }
 
-export interface GifItem {
-  id: string;
-  title: string;
-  url: string;
-  preview: string;
-  width: string;
-  height: string;
-}
+// ==============================================================================
+// AUTH TYPES
+// ==============================================================================
 
-export interface GifResponse {
-  gifs: GifItem[];
-}
-
-// Auth types
 export interface User {
   id: number;
   username: string;
-  email: string;
-  role: string;
+  role: 'USER' | 'PRO' | 'ADMIN';
+  is_pro: boolean;
   twitch_id: string | null;
   twitch_username: string | null;
 }
@@ -102,10 +113,15 @@ export interface TwitchLoginResponse {
   authorization_url: string;
 }
 
+// ==============================================================================
+// FOLLOWING / STREAMER TYPES
+// ==============================================================================
+
 export interface Streamer {
   id: number;
   streamer_name: string;
   streamer_id: string;
+  include_in_for_you: boolean;
 }
 
 export interface TwitchFollow {
@@ -118,4 +134,16 @@ export interface SearchChannel {
   name: string;
   game_name: string;
   is_live: boolean;
+}
+
+// ==============================================================================
+// MISC
+// ==============================================================================
+
+export interface QueueStatusResponse {
+  status: string;
+}
+
+export interface ProcessStatusResponse {
+  status: string;
 }

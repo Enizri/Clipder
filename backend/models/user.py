@@ -1,15 +1,15 @@
+import enum
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import String, Integer, DateTime, Enum as SQLEnum
+from sqlalchemy import String, Integer, Boolean, DateTime, Enum as SQLEnum, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-import enum
 
 from backend.core.database import Base
 
 if TYPE_CHECKING:
     from backend.models.vote import Vote
+    from backend.models.user_streamer import UserStreamer
 
 
 class UserRole(str, enum.Enum):
@@ -25,31 +25,31 @@ class User(Base):
     username: Mapped[str] = mapped_column(
         String(50), unique=True, index=True, nullable=False
     )
-    email: Mapped[str] = mapped_column(
-        String(255), unique=True, index=True, nullable=False
-    )
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Twitch-only auth: email and password are no longer required
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     role: Mapped[UserRole] = mapped_column(
         SQLEnum(UserRole), default=UserRole.USER, nullable=False
     )
-    twitch_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # PRO tier gating
+    is_pro: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Tracks free AI studio uses before paywall (Phase 2)
+    free_studio_clips_generated: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    twitch_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, unique=True)
     twitch_username: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    twitch_access_token: Mapped[Optional[str]] = mapped_column(
-        String(500), nullable=True
-    )
-    twitch_refresh_token: Mapped[Optional[str]] = mapped_column(
-        String(500), nullable=True
-    )
+    twitch_access_token: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    twitch_refresh_token: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+    # Lazy-load relationships (only load when explicitly accessed)
     votes: Mapped[list["Vote"]] = relationship(
-        "Vote", back_populates="user", cascade="all, delete-orphan", lazy="selectin"
+        "Vote", back_populates="user", cascade="all, delete-orphan", lazy="select"
     )
     streamers: Mapped[list["UserStreamer"]] = relationship(
-        "UserStreamer",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="selectin",
+        "UserStreamer", back_populates="user", cascade="all, delete-orphan", lazy="select"
     )

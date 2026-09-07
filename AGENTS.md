@@ -1,5 +1,11 @@
 # Clipder - Agent Guidelines
 
+Canonical instructions for all coding agents (Cursor, Claude Code, Codex, Copilot).
+
+- **Claude Code:** start at [CLAUDE.md](./CLAUDE.md), which only points here. Do not copy rules into `CLAUDE.md`.
+- **Humans:** [README.md](./README.md) is the project overview.
+- Update this file in the same change when routes, models, env vars, or layout change.
+
 ## Role & Task
 
 ```
@@ -29,7 +35,7 @@ Task: Refactor ClipApp to FastAPI + React/TS/Vite
 
 ## 1. Core Constraints (DO NOT BREAK)
 
-- **Immutable Core:** `core.py` contains the algorithmic engine (Config, TwitchClient, StateManager, GroqClient, VideoProcessor, YouTubeUploader, TikTokUploader). **DO NOT modify** its logic or function signatures. It is the "Source of Truth."
+- **Immutable Core:** `backend/engine.py` contains the algorithmic engine (Config, TwitchClient, StateManager, GroqClient, VideoProcessor, YouTubeUploader, TikTokUploader). **DO NOT modify** its logic or function signatures. It is the "Source of Truth."
 - **Dependency Management:** Use `uv`. Every new dependency **MUST** be added via `uv add`. Update `pyproject.toml` accordingly.
 - **State Integrity:** Use `ConnectionManager` singleton in `backend/core/state.py` for WebSocket broadcasting. FastAPI routes access `core.py`'s StateManager via dependency injection. Ensure state is thread-safe and shared across all route handlers.
 - **Database:** PostgreSQL with SQLAlchemy async ORM. Use Alembic for migrations. Environment variable `DATABASE_URL` required (e.g., `postgresql+asyncpg://user:pass@localhost/clipder`).
@@ -45,7 +51,7 @@ Task: Refactor ClipApp to FastAPI + React/TS/Vite
 - **Authentication:** JWT (HS256) + Bcrypt hashing. Twitch OAuth for social login.
 - **Real-time:** WebSocket support via FastAPI for leaderboard streaming (ConnectionManager singleton).
 - **Performance:** All endpoints are `async def`. Use SQLAlchemy async sessions with dependency injection.
-- **Video Processing:** Integrates with `core.py` for clip extraction, transcription (via Groq), and multi-platform uploads (YouTube, TikTok).
+- **Video Processing:** Integrates with `backend/engine.py` for clip extraction, transcription (via Groq), and multi-platform uploads (YouTube, TikTok).
 
 ---
 
@@ -54,7 +60,6 @@ Task: Refactor ClipApp to FastAPI + React/TS/Vite
 ```
 ClipApp/
 ├── pyproject.toml                # Dependencies managed with uv
-├── core.py                       # IMMUTABLE: Core engine (TwitchClient, StateManager, etc.)
 ├── main.py                       # FastAPI entry point with 7 routers + WebSocket
 ├── alembic.ini                   # Database migration config
 ├── alembic/
@@ -63,6 +68,7 @@ ClipApp/
 │   └── versions/                 # Migration scripts (e.g., b7f027ceb621_initial_migration.py)
 ├── backend/
 │   ├── __init__.py
+│   ├── engine.py                   # IMMUTABLE: Core engine (TwitchClient, StateManager, etc.)
 │   ├── api/
 │   │   └── v1/
 │   │       ├── deps.py          # Dependency injection (is_pro, get_current_user, etc.)
@@ -71,7 +77,7 @@ ClipApp/
 │   │           ├── clips.py     # Swipe & Like logic
 │   │           ├── leaderboard.py # Top 10 Monthly, WebSocket broadcast
 │   │           ├── vote.py      # Vote endpoints
-│   │           ├── admin.py     # Pro Playground & Admin queue
+│   │           ├── admin.py     # Admin-only process queue
 │   │           ├── following.py # Following management
 │   │           └── ai_chat.py   # AI chat/transcription endpoints
 │   ├── core/

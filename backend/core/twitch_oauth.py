@@ -1,8 +1,8 @@
 import logging
-from typing import Dict, List, Optional
-from urllib.parse import urlencode
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote, urlencode
 
-import requests
+import httpx
 
 from backend.core.config import get_settings
 
@@ -11,7 +11,7 @@ settings = get_settings()
 
 
 class TwitchOAuth:
-    def __init__(self):
+    def __init__(self) -> None:
         self.client_id = settings.twitch_client_id
         self.client_secret = settings.twitch_client_secret
         self.redirect_uri = settings.twitch_redirect_uri
@@ -27,7 +27,7 @@ class TwitchOAuth:
             params["state"] = state
         return f"https://id.twitch.tv/oauth2/authorize?{urlencode(params)}"
 
-    def exchange_code_for_token(self, code: str) -> Optional[Dict[str, str]]:
+    async def exchange_code_for_token(self, code: str) -> Optional[Dict[str, str]]:
         url = "https://id.twitch.tv/oauth2/token"
         data = {
             "client_id": self.client_id,
@@ -37,14 +37,15 @@ class TwitchOAuth:
             "redirect_uri": self.redirect_uri,
         }
         try:
-            response = requests.post(url, data=data, timeout=10)
-            response.raise_for_status()
-            return response.json()
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(url, data=data)
+                response.raise_for_status()
+                return response.json()
         except Exception as e:
             logger.error(f"Error exchanging code for token: {e}")
             return None
 
-    def refresh_token(self, refresh_token: str) -> Optional[Dict[str, str]]:
+    async def refresh_token(self, refresh_token: str) -> Optional[Dict[str, str]]:
         url = "https://id.twitch.tv/oauth2/token"
         data = {
             "client_id": self.client_id,
@@ -53,77 +54,86 @@ class TwitchOAuth:
             "grant_type": "refresh_token",
         }
         try:
-            response = requests.post(url, data=data, timeout=10)
-            response.raise_for_status()
-            return response.json()
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(url, data=data)
+                response.raise_for_status()
+                return response.json()
         except Exception as e:
             logger.error(f"Error refreshing token: {e}")
             return None
 
-    def get_user_info(self, access_token: str) -> Optional[Dict[str, str]]:
+    async def get_user_info(self, access_token: str) -> Optional[Dict[str, str]]:
         url = "https://api.twitch.tv/helix/users"
         headers = {
             "Client-ID": self.client_id,
             "Authorization": f"Bearer {access_token}",
         }
         try:
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            data = response.json().get("data", [])
-            if data:
-                user = data[0]
-                return {
-                    "id": user["id"],
-                    "login": user["login"],
-                    "display_name": user["display_name"],
-                }
-            return None
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json().get("data", [])
+                if data:
+                    user = data[0]
+                    return {
+                        "id": user["id"],
+                        "login": user["login"],
+                        "display_name": user["display_name"],
+                    }
+                return None
         except Exception as e:
             logger.error(f"Error getting user info: {e}")
             return None
 
-    def get_user_follows(self, access_token: str, user_id: str) -> List[Dict[str, str]]:
+    async def get_user_follows(
+        self, access_token: str, user_id: str
+    ) -> List[Dict[str, str]]:
         url = f"https://api.twitch.tv/helix/users/follows?from_id={user_id}"
         headers = {
             "Client-ID": self.client_id,
             "Authorization": f"Bearer {access_token}",
         }
-        follows = []
+        follows: List[Dict[str, str]] = []
         try:
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            for follow in data.get("data", []):
-                follows.append(
-                    {
-                        "to_id": follow["to_id"],
-                        "to_name": follow["to_name"],
-                    }
-                )
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                for follow in data.get("data", []):
+                    follows.append(
+                        {
+                            "to_id": follow["to_id"],
+                            "to_name": follow["to_name"],
+                        }
+                    )
         except Exception as e:
             logger.error(f"Error getting user follows: {e}")
         return follows
 
-    def search_channels(self, query: str, access_token: str) -> List[Dict[str, str]]:
-        url = f"https://api.twitch.tv/helix/search/channels?query={query}"
+    async def search_channels(
+        self, query: str, access_token: str
+    ) -> List[Dict[str, Any]]:
+        url = f"https://api.twitch.tv/helix/search/channels?query={quote(query)}"
         headers = {
             "Client-ID": self.client_id,
             "Authorization": f"Bearer {access_token}",
         }
-        channels = []
+        # game_name is str, is_live is bool — not Dict[str, str].
+        channels: List[Dict[str, Any]] = []
         try:
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            for channel in data.get("data", []):
-                channels.append(
-                    {
-                        "id": channel["id"],
-                        "name": channel["display_name"],
-                        "game_name": channel.get("game_name", ""),
-                        "is_live": channel.get("is_live", False),
-                    }
-                )
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                for channel in data.get("data", []):
+                    channels.append(
+                        {
+                            "id": channel["id"],
+                            "name": channel["display_name"],
+                            "game_name": channel.get("game_name", ""),
+                            "is_live": channel.get("is_live", False),
+                        }
+                    )
         except Exception as e:
             logger.error(f"Error searching channels: {e}")
         return channels

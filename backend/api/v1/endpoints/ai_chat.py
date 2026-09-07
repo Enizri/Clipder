@@ -4,8 +4,11 @@ import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
-import os
 import httpx
+
+from backend.api.v1.deps import get_current_user
+from backend.core.config import get_settings
+from backend.models import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/ai", tags=["ai"])
@@ -33,7 +36,7 @@ class ChatResponse(BaseModel):
 
 async def get_ai_response(request: ChatRequest) -> ChatResponse:
     """Get AI response from Groq API for clip editing assistance."""
-    groq_api_key = os.getenv("GROQ_API_KEY")
+    groq_api_key = get_settings().groq_api_key
     if not groq_api_key:
         logger.error("GROQ_API_KEY not configured")
         raise HTTPException(status_code=500, detail="AI service not configured")
@@ -93,8 +96,7 @@ Please provide detailed editing recommendations for this clip.
                     "Content-Type": "application/json",
                 },
                 json={
-                    #updated model from mistral to gpt-oss-120b 
-                    "model": "openai/gpt-oss-120b",
+                    "model": get_settings().groq_chat_model,
                     "messages": messages,
                     "temperature": 0.7,
                     "max_tokens": 1024,
@@ -131,12 +133,15 @@ Please provide detailed editing recommendations for this clip.
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat_for_clip_editing(request: ChatRequest) -> ChatResponse:
+async def chat_for_clip_editing(
+    request: ChatRequest,
+    _: User = Depends(get_current_user),
+) -> ChatResponse:
     """
     Get AI-powered editing suggestions for a clip.
-    
-    The AI will analyze the clip details and user's request,
-    providing specific editing recommendations, effects, music suggestions,
-    and platform optimization tips.
+
+    Requires authentication. The AI will analyze the clip details and user's
+    request, providing specific editing recommendations, effects, music
+    suggestions, and platform optimization tips.
     """
     return await get_ai_response(request)
