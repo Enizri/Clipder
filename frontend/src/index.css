@@ -285,6 +285,7 @@ header h1 { font-size: 1.5em; font-weight: 900; color: #ffffff; letter-spacing: 
 .clip-thumbnail, .video-player { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain !important; z-index: 1; }
 .clip-thumbnail { transition: opacity 0.3s ease; z-index: 2; }
 .clip-preview.demo-cover .clip-thumbnail,
+.clip-preview.demo-cover .video-player,
 .clip-preview.demo-cover .blur-bg-container img {
     object-fit: cover !important;
     object-position: center center;

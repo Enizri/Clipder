@@ -212,6 +212,16 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
     });
   }, []);
 
+  /**
+   * Swiping normally halts playback so a card leaving the stack goes quiet. In demo mode the
+   * card keeps playing through the grab and the fly-out, which is what makes the gesture look
+   * live rather than like dragging a screenshot around.
+   */
+  const stopVideosForSwipe = useCallback(() => {
+    if (isDemoMode()) return;
+    stopAllVideos();
+  }, [stopAllVideos]);
+
   const deferredFeedSearch = useDeferredValue(feedSearch);
   const filteredFeedCategories = useMemo(() => {
     const q = normalizeFollowSearchQuery(deferredFeedSearch);
@@ -324,7 +334,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
       if (!currentClip) return;
 
       isSwiping.current = true;
-      stopAllVideos();
+      stopVideosForSwipe();
 
       // A drag already carried the card off-centre, so it flies out immediately.
       // A button press first arms (tilt + hint) so the motion does not teleport.
@@ -387,7 +397,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
         isSwiping.current = false;
       }, armMs + SWIPE_EXIT_MS);
     },
-    [clips, currentIndex, stopAllVideos, user, clipRequestOpts]
+    [clips, currentIndex, stopVideosForSwipe, user, clipRequestOpts]
   );
 
   // ---------------------------------------------------------------------------
@@ -407,7 +417,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
     startX.current = 'touches' in e ? e.touches[0].clientX : e.clientX;
     currentX.current = startX.current;
     cardRef.current?.classList.add('dragging');
-    stopAllVideos();
+    stopVideosForSwipe();
   };
 
   const handleMouseMove = useCallback(
@@ -703,6 +713,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
                         clip={clip}
                         onOpenTheater={() => openTheaterMode(clip.id)}
                         isPreload={idx !== 0}
+                        autoPlay={idx === 0 && isDemoMode()}
                       >
                         <div className="clip-info" style={{ pointerEvents: 'none' }}>
                           <div className="clip-title">{clip.title}</div>

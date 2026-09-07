@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { api } from '../api/client';
-import { isDemoMode } from '../demo/demoClips';
+import { getDemoVideoUrl, isDemoMode } from '../demo/demoClips';
 import { videoUrlCache } from '../utils/videoCache';
 import type { Clip } from '../types';
 
@@ -8,6 +8,8 @@ interface ClipPreviewProps {
   clip: Clip;
   onOpenTheater: () => void;
   isPreload?: boolean;
+  /** Play without waiting for hover — used for the top card of the swipe stack in demo mode. */
+  autoPlay?: boolean;
   children?: React.ReactNode;
 }
 
@@ -15,6 +17,7 @@ export const ClipPreview = React.memo(function ClipPreview({
   clip,
   onOpenTheater,
   isPreload,
+  autoPlay,
   children,
 }: ClipPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -27,7 +30,12 @@ export const ClipPreview = React.memo(function ClipPreview({
   const [isHovering, setIsHovering] = useState(false);
 
   const fetchVideoUrl = useCallback(() => {
-    if (videoSrc || isDemoMode()) return;
+    if (videoSrc) return;
+    if (isDemoMode()) {
+      const demoSrc = getDemoVideoUrl(clip.id);
+      if (demoSrc) setVideoSrc(demoSrc);
+      return;
+    }
     if (videoUrlCache[clip.id]) {
       setVideoSrc(videoUrlCache[clip.id]);
       return;
@@ -54,19 +62,24 @@ export const ClipPreview = React.memo(function ClipPreview({
     }
   }, [isPreload, videoSrc, clip.id]);
 
-  // Trigger fetch when hovering or preloading
+  // Trigger fetch when hovering, preloading, or auto-playing
   useEffect(() => {
-    if (isHovering || isPreload) fetchVideoUrl();
-  }, [isHovering, isPreload, fetchVideoUrl]);
+    if (isHovering || isPreload || autoPlay) fetchVideoUrl();
+  }, [isHovering, isPreload, autoPlay, fetchVideoUrl]);
 
-  // Auto-play once the src lands and we're still hovering
+  // Play once the src lands, either on hover or because this card is the active one
   useEffect(() => {
-    if (!videoSrc || !isHovering) return;
+    if (!videoSrc || !(isHovering || autoPlay)) return;
     const video = videoRef.current;
     if (!video) return;
     const play = () => {
-      video.volume = volume / 100;
-      video.muted = false;
+      // Browsers only allow gesture-free playback while muted.
+      if (autoPlay && !isHovering) {
+        video.muted = true;
+      } else {
+        video.volume = volume / 100;
+        video.muted = false;
+      }
       video.play().catch(() => {});
       setIsPlaying(true);
     };
@@ -75,15 +88,15 @@ export const ClipPreview = React.memo(function ClipPreview({
     } else {
       video.addEventListener('canplay', play, { once: true });
     }
-  }, [isHovering, videoSrc, volume]);
+  }, [isHovering, autoPlay, videoSrc, volume]);
 
-  // Pause when mouse leaves
+  // Pause when the mouse leaves, unless this card is auto-playing
   useEffect(() => {
-    if (!isHovering && isPlaying) {
+    if (!isHovering && !autoPlay && isPlaying) {
       videoRef.current?.pause();
       setIsPlaying(false);
     }
-  }, [isHovering, isPlaying]);
+  }, [isHovering, autoPlay, isPlaying]);
 
   const handlePlayPause = (e: React.MouseEvent) => {
     e.stopPropagation();

@@ -10,7 +10,7 @@
  * Uses Chrome DevTools screencast (JPEG q=96, sRGB) instead of Playwright
  * webm. VP8 is 4:2:0 and washes Clipder's purple/pink UI plus clip thumbs.
  */
-import { mkdir, rm, writeFile, stat } from 'node:fs/promises';
+import { mkdir, rm, writeFile, stat, readFile } from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import { spawnSync, execSync } from 'node:child_process';
 import os from 'node:os';
@@ -36,6 +36,10 @@ const FPS = 25;
 /** Playback speed multiplier applied when resampling the capture. See `densify`. */
 const SPEED = 1.35;
 const PLAYWRIGHT_CACHE = path.join(os.homedir(), '.cache', 'clipder-playwright');
+/** Downloaded demo clip MP4s, cached across runs (signed source URLs expire within a day). */
+const VIDEO_CACHE = path.join(os.homedir(), '.cache', 'clipder-demo-videos');
+/** Synthetic origin the cached MP4s are served from during the recording. */
+const VIDEO_ORIGIN = 'https://clipder-demo-video.invalid';
 
 /**
  * macOS arrow shape (straight left edge, notch, trailing tail). Filled white rather than
@@ -160,6 +164,106 @@ function findFfmpeg() {
   throw new Error(`ffmpeg not found: ${py.stderr || py.stdout}`);
 }
 
+/** Clip ids listed in the frontend demo module, so the two never drift apart. */
+async function readDemoClipIds() {
+  const src = await readFile(path.join(ROOT, 'frontend', 'src', 'demo', 'demoClips.ts'), 'utf8');
+  const ids = [...src.matchAll(/^\s{4}id: '([^']+)',$/gm)].map((m) => m[1]);
+  if (ids.length === 0) throw new Error('no demo clip ids found in demoClips.ts');
+  return ids;
+}
+
+/**
+ * Twitch clip MP4s live behind short-lived signed CloudFront URLs, so they cannot be committed.
+ * Resolve them with yt-dlp and cache the files on disk: playing from a local file keeps the
+ * recording deterministic, where streaming from the CDN could stall and look like a dropped frame.
+ */
+async function ensureDemoVideos(ids) {
+  await mkdir(VIDEO_CACHE, { recursive: true });
+  const files = {};
+
+  for (const id of ids) {
+    const dest = path.join(VIDEO_CACHE, `${id}.mp4`);
+    if (existsSync(dest)) {
+      files[id] = dest;
+      continue;
+    }
+    console.log(`resolving demo video for ${id}`);
+    const res = spawnSync(
+      'uv',
+      [
+        'run',
+        'yt-dlp',
+        '-f',
+        'best[ext=mp4][height<=720]/best[ext=mp4]/best',
+        '-o',
+        dest,
+        `https://clips.twitch.tv/${id}`,
+      ],
+      { encoding: 'utf8', cwd: ROOT },
+    );
+    if (res.status !== 0 || !existsSync(dest)) {
+      throw new Error(`yt-dlp failed for ${id}: ${res.stderr || res.stdout}`);
+    }
+    files[id] = dest;
+  }
+  return files;
+}
+
+/**
+ * Serve the cached MP4s from a synthetic origin. Chromium's media stack asks for byte ranges,
+ * so honour Range requests or playback never starts.
+ */
+async function serveDemoVideos(context, files) {
+  const bodies = Object.fromEntries(
+    await Promise.all(Object.entries(files).map(async ([id, f]) => [id, await readFile(f)])),
+  );
+
+  await context.route(`${VIDEO_ORIGIN}/*.mp4`, async (route, request) => {
+    const id = path.basename(new URL(request.url()).pathname, '.mp4');
+    const body = bodies[id];
+    if (!body) return route.fulfill({ status: 404, body: '' });
+
+    const range = /bytes=(\d*)-(\d*)/.exec(request.headers().range || '');
+    if (!range) {
+      return route.fulfill({
+        status: 200,
+        headers: {
+          'content-type': 'video/mp4',
+          'content-length': String(body.length),
+          'accept-ranges': 'bytes',
+        },
+        body,
+      });
+    }
+
+    const start = range[1] ? Number(range[1]) : 0;
+    const end = range[2] ? Number(range[2]) : body.length - 1;
+    const slice = body.subarray(start, end + 1);
+    return route.fulfill({
+      status: 206,
+      headers: {
+        'content-type': 'video/mp4',
+        'content-length': String(slice.length),
+        'content-range': `bytes ${start}-${end}/${body.length}`,
+        'accept-ranges': 'bytes',
+      },
+      body: slice,
+    });
+  });
+}
+
+/** Block until the active card is actually rendering video, not still showing its poster. */
+async function waitForCardPlayback(page) {
+  await page.waitForFunction(
+    () => {
+      const v = document.querySelector('.clip-card.top-card video');
+      return Boolean(v && v.readyState >= 3 && !v.paused && v.currentTime > 0.1);
+    },
+    undefined,
+    { timeout: 20000 },
+  );
+}
+
 async function waitForHdThumbnails(page, minWidth = 1280) {
   await page.waitForFunction(
     (min) => {
@@ -235,8 +339,11 @@ async function installCursor(page) {
   });
 }
 
-/** Last known pointer position, so every move starts where the previous one ended. */
-let pointer = { x: WIDTH / 2, y: HEIGHT * 0.55 };
+/**
+ * Last known pointer position, so every move starts where the previous one ended. Starts clear
+ * of the card so the opening frames show the feed at rest, not its hover controls.
+ */
+let pointer = { x: WIDTH * 0.76, y: HEIGHT * 0.82 };
 
 const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
 
@@ -321,12 +428,23 @@ async function main() {
     deviceScaleFactor: 2,
     colorScheme: 'dark',
   });
+  const demoIds = await readDemoClipIds();
+  const videoFiles = await ensureDemoVideos(demoIds);
+  await serveDemoVideos(context, videoFiles);
+
   const page = await context.newPage();
   await page.emulateMedia({ colorScheme: 'dark' });
+  await page.addInitScript(
+    (map) => {
+      window.__clipderDemoVideos = map;
+    },
+    Object.fromEntries(demoIds.map((id) => [id, `${VIDEO_ORIGIN}/${id}.mp4`])),
+  );
 
   await page.goto(`${BASE}/?demo=1`, { waitUntil: 'load' });
   await page.getByText('Clip for Anna').waitFor({ timeout: 15000 });
   await waitForHdThumbnails(page);
+  await waitForCardPlayback(page);
   await installCursor(page);
   await page.mouse.move(pointer.x, pointer.y);
   await sleep(250);
@@ -358,12 +476,14 @@ async function main() {
   await dragSwipe(page, 'right');
   await page.getByText('Emperor failed charisma check').waitFor({ timeout: 10000 });
   await waitForHdThumbnails(page);
+  await waitForCardPlayback(page);
   await sleep(1000);
 
   // 3. Second swipe — Playground waits until this one so both clips are in the queue
   await dragSwipe(page, 'right');
   await page.getByText('Stax + Zest INSTANT 2v4 vs FPX').waitFor({ timeout: 10000 });
   await waitForHdThumbnails(page);
+  await waitForCardPlayback(page);
   await sleep(950);
 
   // 4. Open Playground and show the queued clips
@@ -420,7 +540,9 @@ async function main() {
       '-i',
       seq,
       '-vf',
-      `${vf},palettegen=max_colors=224:reserve_transparent=0:stats_mode=full`,
+      // stats_mode=diff weights the palette toward pixels that actually change, which suits a
+      // capture where the clip is playing back inside the card for the whole run.
+      `${vf},palettegen=max_colors=192:reserve_transparent=0:stats_mode=diff`,
       palette,
     ],
     { encoding: 'utf8' },

@@ -22,6 +22,23 @@ export function isDemoMode(): boolean {
 
 const QUEUE_KEY = 'clipder-demo-queue';
 
+declare global {
+  interface Window {
+    /** clip id -> playable MP4 URL. */
+    __clipderDemoVideos?: Record<string, string>;
+  }
+}
+
+/**
+ * Twitch serves clip MP4s from signed CDN URLs that expire within a day, so they cannot be
+ * committed here. The GIF recorder resolves fresh ones at capture time and injects them; without
+ * that injection the demo simply shows thumbnails.
+ */
+export function getDemoVideoUrl(clipId: string): string | null {
+  if (typeof window === 'undefined') return null;
+  return window.__clipderDemoVideos?.[clipId] ?? null;
+}
+
 /** Public Twitch clip pages + CDN thumbnails used as the demo feed. */
 export const DEMO_CLIPS: Clip[] = [
   {
