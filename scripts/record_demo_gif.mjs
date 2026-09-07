@@ -32,6 +32,9 @@ const HEIGHT = 720;
  */
 const OUT_WIDTH = 896;
 const OUT_HEIGHT = 504;
+const FPS = 25;
+/** Playback speed multiplier applied when resampling the capture. See `densify`. */
+const SPEED = 1.35;
 const PLAYWRIGHT_CACHE = path.join(os.homedir(), '.cache', 'clipder-playwright');
 /** Downloaded demo clip MP4s, cached across runs (signed source URLs expire within a day). */
 const VIDEO_CACHE = path.join(os.homedir(), '.cache', 'clipder-demo-videos');
@@ -309,17 +312,22 @@ async function waitForHdThumbnails(page, minWidth = 1280) {
 }
 
 /**
- * Keep the screencast's own timestamps. Stretching 10 fps captures onto a 25 fps
- * grid was duplicating frames and made the swipe look like it was hitching.
+ * Resample the screencast onto a fixed grid and play it back at SPEED.
+ * Native timing left sparse captures looking stuck; densify keeps motion regular.
  */
-function timedFrames(frames, holdSec = 0.7) {
+function densify(frames, fps, speed = SPEED) {
   if (frames.length === 0) return [];
+  const step = speed / fps;
   const out = [];
-  for (let i = 0; i < frames.length; i += 1) {
-    const nextT = i + 1 < frames.length ? frames[i + 1].t : frames[i].t + holdSec;
-    const duration = Math.min(0.22, Math.max(0.04, nextT - frames[i].t));
-    out.push({ buf: frames[i].buf, duration });
+  const start = frames[0].t;
+  const end = frames[frames.length - 1].t;
+  let i = 0;
+  for (let t = start; t <= end + 1e-6; t += step) {
+    while (i + 1 < frames.length && frames[i + 1].t <= t) i += 1;
+    out.push(frames[i]);
   }
+  const hold = Math.round(fps * 1.0);
+  for (let k = 0; k < hold; k += 1) out.push(frames[frames.length - 1]);
   return out;
 }
 
@@ -344,17 +352,6 @@ async function installCursor(page) {
     );
     window.addEventListener('mousedown', () => ring.classList.add('is-down'), opts);
     window.addEventListener('mouseup', () => ring.classList.remove('is-down'), opts);
-    const tick = document.createElement('div');
-    tick.style.cssText =
-      'position:fixed;top:0;left:0;width:1px;height:1px;pointer-events:none;z-index:2147483647';
-    document.body.append(tick);
-    let on = false;
-    const pulse = () => {
-      on = !on;
-      tick.style.background = on ? '#0b0b12' : '#0c0c13';
-      requestAnimationFrame(pulse);
-    };
-    requestAnimationFrame(pulse);
   });
 }
 
@@ -559,7 +556,7 @@ async function main() {
   await browser.close();
 
   const span = raw.length ? raw[raw.length - 1].t - raw[0].t : 0;
-  const frames = timedFrames(raw);
+  const frames = densify(raw, FPS);
   if (frames.length < 16) {
     throw new Error(`too few frames: raw=${raw.length} span=${span.toFixed(3)}s picked=${frames.length}`);
   }
@@ -569,35 +566,24 @@ async function main() {
     ),
   );
 
-  const concatPath = path.join(FRAME_DIR, '_concat.txt');
-  const concatLines = [];
-  for (let i = 0; i < frames.length; i += 1) {
-    const name = `${String(i).padStart(4, '0')}.jpg`;
-    concatLines.push(`file '${name}'`);
-    concatLines.push(`duration ${frames[i].duration.toFixed(4)}`);
-  }
-  concatLines.push(`file '${String(frames.length - 1).padStart(4, '0')}.jpg'`);
-  await writeFile(concatPath, concatLines.join('\n'));
-
   const ffmpeg = findFfmpeg();
   const palette = path.join(FRAME_DIR, '_palette.png');
-  const vf = `scale=${OUT_WIDTH}:${OUT_HEIGHT}:flags=lanczos,setsar=1`;
+  const seq = path.join(FRAME_DIR, '%04d.jpg');
+  const vf = `scale=${OUT_WIDTH}:${OUT_HEIGHT}:flags=lanczos,setsar=1,unsharp=3:3:0.5:3:3:0.0`;
 
   const gen = spawnSync(
     ffmpeg,
     [
       '-y',
-      '-f',
-      'concat',
-      '-safe',
-      '0',
+      '-framerate',
+      String(FPS),
       '-i',
-      concatPath,
+      seq,
       '-vf',
       `${vf},palettegen=max_colors=192:reserve_transparent=0:stats_mode=diff`,
       palette,
     ],
-    { encoding: 'utf8', cwd: FRAME_DIR },
+    { encoding: 'utf8' },
   );
   if (gen.status !== 0) {
     console.error(gen.stdout, gen.stderr);
@@ -608,12 +594,10 @@ async function main() {
     ffmpeg,
     [
       '-y',
-      '-f',
-      'concat',
-      '-safe',
-      '0',
+      '-framerate',
+      String(FPS),
       '-i',
-      concatPath,
+      seq,
       '-i',
       palette,
       '-lavfi',
@@ -622,7 +606,7 @@ async function main() {
       '0',
       OUT_GIF,
     ],
-    { encoding: 'utf8', cwd: FRAME_DIR },
+    { encoding: 'utf8' },
   );
   if (use.status !== 0) {
     console.error(use.stdout, use.stderr);
@@ -640,8 +624,9 @@ async function main() {
     `${span.toFixed(2)}s`,
     'frames',
     frames.length,
-    'native_fps',
-    span ? (raw.length / span).toFixed(1) : '0',
+    'fps',
+    FPS,
+    `speed=${SPEED}`,
     `${OUT_WIDTH}x${OUT_HEIGHT}`,
   );
   // CLIPDER_KEEP_FRAMES=1 leaves the JPEGs in place for re-encoding experiments.
