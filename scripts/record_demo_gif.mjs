@@ -33,6 +33,8 @@ const HEIGHT = 720;
 const OUT_WIDTH = 896;
 const OUT_HEIGHT = 504;
 const FPS = 25;
+/** Playback speed multiplier applied when resampling the capture. See `densify`. */
+const SPEED = 1.15;
 const PLAYWRIGHT_CACHE = path.join(os.homedir(), '.cache', 'clipder-playwright');
 
 /**
@@ -186,9 +188,16 @@ async function waitForHdThumbnails(page, minWidth = 1280) {
   });
 }
 
-function densify(frames, fps) {
+/**
+ * Resample the screencast (which only emits frames when pixels change) onto a fixed
+ * grid. Walking the source timeline in `SPEED / fps` increments plays the whole
+ * walkthrough back that much faster while still emitting a distinct frame per step —
+ * the capture rate during animation is well above the output rate, so nothing is
+ * duplicated where it matters.
+ */
+function densify(frames, fps, speed = SPEED) {
   if (frames.length === 0) return [];
-  const step = 1 / fps;
+  const step = speed / fps;
   const out = [];
   const start = frames[0].t;
   const end = frames[frames.length - 1].t;
@@ -197,7 +206,7 @@ function densify(frames, fps) {
     while (i + 1 < frames.length && frames[i + 1].t <= t) i += 1;
     out.push(frames[i]);
   }
-  const hold = Math.round(fps * 1.1);
+  const hold = Math.round(fps * 1.0);
   for (let k = 0; k < hold; k += 1) out.push(frames[frames.length - 1]);
   return out;
 }
