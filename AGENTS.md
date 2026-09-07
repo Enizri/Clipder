@@ -387,6 +387,20 @@ Use consistent section dividers in large files:
 - If asked to work with credentials, use placeholder values and instruct user to add their own
 - If credentials are accidentally exposed in conversation, warn the user to rotate them immediately
 
+### Secret-Blocking Pre-Commit Hook
+
+`.githooks/pre-commit` blocks commits containing credentials (Google OAuth secrets and
+tokens, API keys, private keys) and credential filenames (`client_secrets.json`,
+`*.pickle`, `.env`, `*.pem`). It is version-controlled, but `core.hooksPath` is a local
+setting - **after cloning, run:**
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Lock files and minified bundles are skipped (their base64 hashes trigger false positives).
+`git commit --no-verify` bypasses the hook; only use it for a confirmed false positive.
+
 ### Accessing Environment Variables in Code
 
 When you need to access environment variables in Python code (for API calls, configs, etc.), use `os.environ` or `python-dotenv`. **Never hardcode credentials** - always load them from environment:
