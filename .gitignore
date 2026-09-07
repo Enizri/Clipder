@@ -78,3 +78,6 @@ nul
 clips_to_process/
 processed_clips/
 TASKS
+
+# Demo GIF capture intermediates
+docs/screenshots/_frames/

@@ -134,7 +134,7 @@ export const ClipPreview = React.memo(function ClipPreview({
 
   return (
     <div
-      className="clip-preview"
+      className={`clip-preview${isDemoMode() ? ' demo-cover' : ''}`}
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
     >

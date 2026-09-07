@@ -7,8 +7,8 @@
  * Playwright is installed to ~/.cache/clipder-playwright (not a repo dep).
  * GIF encode uses a full ffmpeg via `uv run --with imageio-ffmpeg`.
  *
- * Frames are lossless PNG (sRGB) so purple/pink UI and clip thumbnails keep
- * their color. Playwright's webm path is VP8 yuv420 and washes the palette.
+ * Uses Chrome DevTools screencast (JPEG q=96, sRGB) instead of Playwright
+ * webm. VP8 is 4:2:0 and washes Clipder's purple/pink UI plus clip thumbs.
  */
 import { mkdir, rm, writeFile, stat } from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -26,6 +26,29 @@ const WIDTH = 1280;
 const HEIGHT = 720;
 const FPS = 16;
 const PLAYWRIGHT_CACHE = path.join(os.homedir(), '.cache', 'clipder-playwright');
+
+const CURSOR_CSS = `
+#clipder-demo-cursor {
+  position: fixed;
+  left: 48%;
+  top: 52%;
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid #fff;
+  border-radius: 14px 14px 14px 3px;
+  background: linear-gradient(135deg, #f5d0fe, #8b5cf6);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.5), 0 0 0 3px rgba(139,92,246,0.28);
+  z-index: 2147483647;
+  pointer-events: none;
+  transition: left 0.8s cubic-bezier(0.22, 1, 0.36, 1),
+              top 0.8s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.14s ease;
+  transform: translate(-3px, -3px) rotate(-18deg);
+}
+#clipder-demo-cursor.is-click {
+  transform: translate(-3px, -3px) rotate(-18deg) scale(0.78);
+}
+`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -127,6 +150,61 @@ async function waitForHdThumbnails(page, minWidth = 1280) {
   });
 }
 
+function densify(frames, fps) {
+  if (frames.length === 0) return [];
+  const step = 1 / fps;
+  const out = [];
+  const start = frames[0].t;
+  const end = frames[frames.length - 1].t;
+  let i = 0;
+  for (let t = start; t <= end + 1e-6; t += step) {
+    while (i + 1 < frames.length && frames[i + 1].t <= t) i += 1;
+    out.push(frames[i]);
+  }
+  const hold = Math.round(fps * 2.2);
+  for (let k = 0; k < hold; k += 1) out.push(frames[frames.length - 1]);
+  return out;
+}
+
+async function installCursor(page) {
+  await page.addStyleTag({ content: CURSOR_CSS });
+  await page.evaluate(() => {
+    const el = document.createElement('div');
+    el.id = 'clipder-demo-cursor';
+    document.body.appendChild(el);
+  });
+}
+
+async function moveCursorTo(page, locator, ms = 800) {
+  const box = await locator.boundingBox();
+  if (!box) throw new Error('target has no bounding box');
+  const x = Math.round(box.x + box.width / 2);
+  const y = Math.round(box.y + box.height / 2);
+  await page.evaluate(
+    ({ x, y, ms }) => {
+      const el = document.getElementById('clipder-demo-cursor');
+      if (!el) return;
+      el.style.transitionDuration = `${ms}ms`;
+      el.style.left = `${x}px`;
+      el.style.top = `${y}px`;
+    },
+    { x, y, ms },
+  );
+  await sleep(ms + 100);
+}
+
+async function clickWithCursor(page, locator) {
+  await page.evaluate(() => {
+    document.getElementById('clipder-demo-cursor')?.classList.add('is-click');
+  });
+  await sleep(140);
+  await locator.click();
+  await sleep(120);
+  await page.evaluate(() => {
+    document.getElementById('clipder-demo-cursor')?.classList.remove('is-click');
+  });
+}
+
 async function main() {
   await waitForServer(BASE);
   await rm(FRAME_DIR, { recursive: true, force: true });
@@ -137,64 +215,104 @@ async function main() {
     headless: true,
     args: ['--force-color-profile=srgb', '--disable-lcd-text', '--hide-scrollbars'],
   });
-  const page = await browser.newPage({
+  const context = await browser.newContext({
     viewport: { width: WIDTH, height: HEIGHT },
     deviceScaleFactor: 2,
     colorScheme: 'dark',
   });
+  const page = await context.newPage();
   await page.emulateMedia({ colorScheme: 'dark' });
 
-  let n = 0;
-  const shot = async () => {
-    const buf = await page.screenshot({ type: 'png', animations: 'allow' });
-    await writeFile(path.join(FRAME_DIR, `${String(n).padStart(4, '0')}.png`), buf);
-    n += 1;
-  };
-
-  const burst = async (ms) => {
-    const interval = 1000 / FPS;
-    const end = Date.now() + ms;
-    while (Date.now() < end) {
-      const t = Date.now();
-      await shot();
-      const wait = interval - (Date.now() - t);
-      if (wait > 0) await sleep(wait);
-    }
-  };
-
-  await page.goto(`${BASE}/?demo=1`, { waitUntil: 'networkidle' });
+  await page.goto(`${BASE}/?demo=1`, { waitUntil: 'load' });
   await page.getByText('Clip for Anna').waitFor({ timeout: 15000 });
   await waitForHdThumbnails(page);
+  await installCursor(page);
   await sleep(250);
-  await burst(1100);
 
-  await page.getByTestId('btn-like').hover();
-  await burst(280);
-  await page.getByTestId('btn-like').click();
-  await burst(700);
+  const likeBtn = page.getByTestId('btn-like');
+  const playgroundTab = page.getByTestId('nav-playground');
 
-  await page.getByTestId('nav-playground').click();
+  const raw = [];
+  const session = await context.newCDPSession(page);
+  session.on('Page.screencastFrame', async ({ data, sessionId, metadata }) => {
+    raw.push({ t: metadata.timestamp, buf: Buffer.from(data, 'base64') });
+    try {
+      await session.send('Page.screencastFrameAck', { sessionId });
+    } catch {
+      /* session closed */
+    }
+  });
+  await session.send('Page.startScreencast', {
+    format: 'jpeg',
+    quality: 100,
+    maxWidth: WIDTH * 2,
+    maxHeight: HEIGHT * 2,
+    everyNthFrame: 1,
+  });
+
+  // 1. Let people read the first swipe card
+  await sleep(2600);
+
+  // 2. First like
+  await moveCursorTo(page, likeBtn, 900);
+  await likeBtn.hover();
+  await sleep(700);
+  await clickWithCursor(page, likeBtn);
+  await page.getByText('Emperor failed charisma check').waitFor({ timeout: 10000 });
+  await waitForHdThumbnails(page);
+  await sleep(2200);
+
+  // 3. Second like — Playground waits until this one so both swipes are visible
+  await sleep(400);
+  await clickWithCursor(page, likeBtn);
+  await page.getByText('Stax + Zest INSTANT 2v4 vs FPX').waitFor({ timeout: 10000 });
+  await waitForHdThumbnails(page);
+  await sleep(1800);
+
+  // 4. Open Playground and show the queued clips
+  await moveCursorTo(page, playgroundTab, 850);
+  await sleep(400);
+  await clickWithCursor(page, playgroundTab);
   await page.getByRole('heading', { name: 'Your queue' }).waitFor({ timeout: 10000 });
+  await page.getByText('Emperor failed charisma check').waitFor({ timeout: 10000 });
   await page.getByText('Clip for Anna').waitFor({ timeout: 10000 });
-  await burst(1000);
+  await sleep(2600);
 
-  await page.getByRole('button', { name: 'Analyze' }).first().click();
-  await burst(400);
+  // 5. Analyze and leave the transcript on screen
+  const analyzeBtn = page.getByRole('button', { name: 'Analyze' }).first();
+  const uploadBtn = page.getByRole('button', { name: /Upload YouTube Shorts/ }).first();
+  await moveCursorTo(page, analyzeBtn, 700);
+  await sleep(400);
+  await clickWithCursor(page, analyzeBtn);
   await page.getByText('Transcript ready').waitFor({ timeout: 10000 });
-  await burst(1300);
+  await sleep(2800);
 
-  await page.getByRole('button', { name: /Upload YouTube Shorts/ }).first().click();
-  await burst(400);
+  // 6. Queue YouTube Shorts + TikTok and hold the success state
+  await moveCursorTo(page, uploadBtn, 650);
+  await sleep(400);
+  await clickWithCursor(page, uploadBtn);
   await page.getByText('Queued for YouTube Shorts + TikTok.').waitFor({ timeout: 10000 });
-  await burst(1500);
+  await sleep(2800);
 
+  await session.send('Page.stopScreencast');
+  await sleep(80);
   await browser.close();
-  if (n < 8) throw new Error(`too few frames: ${n}`);
+
+  const span = raw.length ? raw[raw.length - 1].t - raw[0].t : 0;
+  const frames = densify(raw, FPS);
+  if (frames.length < 16) {
+    throw new Error(`too few frames: raw=${raw.length} span=${span.toFixed(3)}s picked=${frames.length}`);
+  }
+  await Promise.all(
+    frames.map((frame, i) =>
+      writeFile(path.join(FRAME_DIR, `${String(i).padStart(4, '0')}.jpg`), frame.buf),
+    ),
+  );
 
   const ffmpeg = findFfmpeg();
   const palette = path.join(FRAME_DIR, '_palette.png');
-  const seq = path.join(FRAME_DIR, '%04d.png');
-  const vf = `scale=${WIDTH}:${HEIGHT}:flags=lanczos,setsar=1`;
+  const seq = path.join(FRAME_DIR, '%04d.jpg');
+  const vf = `scale=${WIDTH}:${HEIGHT}:flags=lanczos,setsar=1,unsharp=3:3:0.6:3:3:0.0`;
 
   const gen = spawnSync(
     ffmpeg,
@@ -226,7 +344,7 @@ async function main() {
       '-i',
       palette,
       '-lavfi',
-      `${vf}[x];[x][1:v]paletteuse=dither=none:diff_mode=rectangle`,
+      `${vf}[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`,
       '-loop',
       '0',
       OUT_GIF,
@@ -239,7 +357,20 @@ async function main() {
   }
 
   const info = await stat(OUT_GIF);
-  console.log(OUT_GIF, 'bytes', info.size, 'frames', n, 'fps', FPS, `${WIDTH}x${HEIGHT}`);
+  console.log(
+    OUT_GIF,
+    'bytes',
+    info.size,
+    'raw',
+    raw.length,
+    'span',
+    `${span.toFixed(2)}s`,
+    'frames',
+    frames.length,
+    'fps',
+    FPS,
+    `${WIDTH}x${HEIGHT}`,
+  );
   await rm(FRAME_DIR, { recursive: true, force: true });
 }
 
