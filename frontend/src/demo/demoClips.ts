@@ -1,0 +1,91 @@
+import type { Clip, User } from '../types';
+
+export const DEMO_USER: User = {
+  id: 0,
+  username: 'demo',
+  role: 'USER',
+  is_pro: false,
+  twitch_id: null,
+  twitch_username: 'clipder-demo',
+};
+
+const DEMO_FLAG = 'clipder-demo-mode';
+
+export function isDemoMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (new URLSearchParams(window.location.search).get('demo') === '1') {
+    sessionStorage.setItem(DEMO_FLAG, '1');
+    return true;
+  }
+  return sessionStorage.getItem(DEMO_FLAG) === '1';
+}
+
+const QUEUE_KEY = 'clipder-demo-queue';
+
+/** Public Twitch clip pages + CDN thumbnails used as the demo feed. */
+export const DEMO_CLIPS: Clip[] = [
+  {
+    id: 'SeductivePerfectClipsdadOneHand-QDHtFh3QBebzcPAV',
+    title: 'Clip for Anna',
+    url: 'https://clips.twitch.tv/SeductivePerfectClipsdadOneHand-QDHtFh3QBebzcPAV',
+    thumbnail_url:
+      'https://static-cdn.jtvnw.net/twitch-clips-thumbnails-prod/SeductivePerfectClipsdadOneHand-QDHtFh3QBebzcPAV/b46f9699-bbd3-4b7f-96af-05b0bdaea68b/preview-480x272.jpg',
+    view_count: 184200,
+    creator_name: 'xAnnaGrace',
+    duration: 28,
+    created_at: '2024-11-02T18:22:00Z',
+    channel: 'xannagrace',
+    local_likes: 12,
+    comment_count: 4,
+  },
+  {
+    id: 'OriginalEasyEndiveBloodTrail-r-MGj69BnciPyb1O',
+    title: 'Emperor failed charisma check',
+    url: 'https://clips.twitch.tv/OriginalEasyEndiveBloodTrail-r-MGj69BnciPyb1O',
+    thumbnail_url:
+      'https://static-cdn.jtvnw.net/twitch-video-assets/twitch-vap-video-assets-prod-us-west-2/8d54bff0-c68a-4d53-90ca-aa6ec1cbabf7/landscape/thumb/thumb-0000000000-1920x1080.jpg',
+    view_count: 96200,
+    creator_name: 'xAnnaGrace',
+    duration: 22,
+    created_at: '2024-10-18T21:04:00Z',
+    channel: 'xannagrace',
+    local_likes: 8,
+    comment_count: 2,
+  },
+  {
+    id: 'SourHilariousFishPeteZaroll-c13qZ1aGXTzxWz-e',
+    title: 'Stax + Zest INSTANT 2v4 vs FPX',
+    url: 'https://clips.twitch.tv/SourHilariousFishPeteZaroll-c13qZ1aGXTzxWz-e',
+    thumbnail_url: 'https://static-cdn.jtvnw.net/ttv-boxart/VALORANT-285x380.jpg',
+    view_count: 241000,
+    creator_name: 'tarik',
+    duration: 34,
+    created_at: '2024-09-09T14:11:00Z',
+    channel: 'tarik',
+    local_likes: 31,
+    comment_count: 9,
+  },
+];
+
+export function readDemoQueue(): Clip[] {
+  try {
+    const raw = sessionStorage.getItem(QUEUE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function pushDemoQueue(clip: Clip): void {
+  const next = [clip, ...readDemoQueue().filter((c) => c.id !== clip.id)];
+  sessionStorage.setItem(QUEUE_KEY, JSON.stringify(next));
+}
+
+export function removeDemoQueue(clipId: string): void {
+  sessionStorage.setItem(
+    QUEUE_KEY,
+    JSON.stringify(readDemoQueue().filter((c) => c.id !== clipId)),
+  );
+}

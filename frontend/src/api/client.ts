@@ -11,6 +11,9 @@ import type {
   User,
   Streamer,
   SearchChannel,
+  AnalyzeClipResponse,
+  UploadClipResponse,
+  UploadPlatform,
 } from '../types';
 
 const getConfiguredApiOrigin = (): string | null => {
@@ -222,6 +225,20 @@ export const api = {
     clipId: string,
   ): Promise<{ status: string; message: string; marked_for_export: boolean }> =>
     fetchJson(`/ai-editor/history/clip/${clipId}/export`, { method: 'POST' }),
+
+  analyzeClip: (clipId: string): Promise<AnalyzeClipResponse> =>
+    fetchJson<AnalyzeClipResponse>(`/ai-editor/history/clip/${clipId}/analyze`, {
+      method: 'POST',
+    }),
+
+  uploadClip: (
+    clipId: string,
+    platforms: UploadPlatform[],
+  ): Promise<UploadClipResponse> =>
+    fetchJson<UploadClipResponse>(`/ai-editor/history/clip/${clipId}/upload`, {
+      method: 'POST',
+      body: JSON.stringify({ platforms }),
+    }),
 
   chatForClip: (data: {
     clip_title: string;

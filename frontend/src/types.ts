@@ -147,3 +147,19 @@ export interface QueueStatusResponse {
 export interface ProcessStatusResponse {
   status: string;
 }
+
+export type UploadPlatform = 'youtube_shorts' | 'tiktok';
+
+export interface AnalyzeClipResponse {
+  transcript: string;
+  score: number;
+  title: string;
+  description: string;
+}
+
+export interface UploadClipResponse {
+  status: string;
+  youtube: string | null;
+  tiktok: boolean;
+  message: string;
+}

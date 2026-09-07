@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 
 class ChatMessage(BaseModel):
@@ -67,4 +67,30 @@ class DeleteHistoryResponse(BaseModel):
     """Response after deleting a history item."""
 
     status: str
+    message: str
+
+
+class AnalyzeClipResponse(BaseModel):
+    """Groq (or demo) analysis of a queued playground clip."""
+
+    transcript: str
+    score: float = Field(..., ge=0.0, le=1.0)
+    title: str
+    description: str
+
+
+class UploadClipRequest(BaseModel):
+    """Requested social destinations for a queued clip."""
+
+    platforms: List[Literal["youtube_shorts", "tiktok"]] = Field(
+        ..., min_length=1
+    )
+
+
+class UploadClipResponse(BaseModel):
+    """Queued multi-platform export. Live adapters in engine.py are stubs."""
+
+    status: str
+    youtube: Optional[str] = None
+    tiktok: bool = False
     message: str

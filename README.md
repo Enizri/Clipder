@@ -1,17 +1,31 @@
 # Clipder
 
-A Twitch clip discovery and ranking platform. Users swipe through clips,
-vote (like / dislike), and a real-time leaderboard tracks the top clips each month.
+Twitch clip discovery: swipe to vote, rank a live monthly leaderboard, then
+send liked clips through Groq (transcript + score) and queue them for
+YouTube Shorts and TikTok.
+
+![Demo: swipe a Twitch clip, open the queue, analyze, upload to YouTube Shorts and TikTok](docs/screenshots/clipder-demo.gif)
 
 ![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.135+-green.svg)
 ![React](https://img.shields.io/badge/React-18-61dafb.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue.svg)
 
+**Repo:** [github.com/Enizri/Clipder](https://github.com/Enizri/Clipder)
+
+### Resume (two lines)
+
+Clipder — FastAPI + React app for Twitch clip discovery: swipe to vote, live monthly leaderboard, and a playground that transcribes liked clips with Groq then queues YouTube Shorts and TikTok.
+https://github.com/Enizri/Clipder
+
+YouTube / TikTok **publish** is a queued export (live adapters are stubs). The
+playground still runs Groq analysis when `GROQ_API_KEY` is set.
+
 ## Features
 
 - **Swipe & Vote** — card-swipe interface for discovering Twitch clips
-- **Playground** — logged-in users send liked clips to a personal queue, skip or mark for export, and chat with Groq
+- **Playground** — swipe right to queue a clip, run Groq analysis (transcript / score / title), then queue YouTube Shorts + TikTok
+- **Demo mode** — `http://localhost:3000/?demo=1` walks that flow on public Twitch clips (no login)
 - **Video Preview** — Hover-to-preview with volume controls
 - **Theater Mode** — Full-screen viewing experience
 - **Comments** — Real-time clip comments with Twitch emote support
@@ -51,8 +65,8 @@ vote (like / dislike), and a real-time leaderboard tracks the top clips each mon
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/ClipApp.git
-cd ClipApp
+git clone https://github.com/Enizri/Clipder.git
+cd Clipder
 ```
 
 ### 2. Configure environment variables
@@ -124,12 +138,16 @@ proxies `/api/*` and `/ws/*` requests to the backend at `localhost:8000`
 (configured in `vite.config.ts`). Open **http://localhost:3000** in your
 browser.
 
+Login-free product walkthrough (public Twitch clips, local queue only):
+
+**http://localhost:3000/?demo=1**
+
 ---
 
 ## Project Structure
 
 ```
-ClipApp/
+Clipder/
 ├── main.py                    # FastAPI entry point, router mounting, WebSocket, lifespan
 ├── pyproject.toml             # Python deps (managed with uv)
 ├── uv.lock                    # Locked Python dependency versions
@@ -197,7 +215,7 @@ All routes live under `/api/v1/`. The backend exposes these router groups:
 
 | Router | Prefix | Auth |
 |--------|--------|------|
-| auth | `/api/v1/auth` | Public (register/login), JWT (me/twitch) |
+| auth | `/api/v1/auth` | Public (Twitch OAuth), JWT (`/me`) |
 | clips | `/api/v1/clips` | Public |
 | votes | `/api/v1/votes` | JWT required |
 | leaderboard | `/api/v1/leaderboard` | Public |

@@ -4,9 +4,10 @@ import { ClipPreview } from '../components/ClipPreview';
 import { CombinedFeedSearch } from '../components/CombinedFeedSearch';
 import { TwitchAuthWall } from '../components/TwitchAuthWall';
 import { videoUrlCache } from '../utils/videoCache';
+import { filterFollowedStreamersByPrefix, normalizeFollowSearchQuery } from '../utils/followSearch';
 import { TheaterMode } from '../components/TheaterMode';
 import type { Clip, User, Streamer } from '../types';
-import { filterFollowedStreamersByPrefix, normalizeFollowSearchQuery } from '../utils/followSearch';
+import { DEMO_CLIPS, isDemoMode, pushDemoQueue } from '../demo/demoClips';
 
 const GUEST_SWIPE_LIMIT = 15;
 
@@ -232,6 +233,13 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
   );
 
   useEffect(() => {
+    if (isDemoMode()) {
+      setClips(DEMO_CLIPS);
+      setCurrentIndex(0);
+      setLoading(false);
+      return;
+    }
+
     const optsKey = JSON.stringify(clipRequestOpts);
     const isFirst = prevClipOptsKeyRef.current === null;
     const categoryOrExploreChanged = isFirst || prevClipOptsKeyRef.current !== optsKey;
@@ -319,17 +327,20 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
 
         // Prefetch next clip's video
         const nextClip = clips[currentIndex + 1];
-        if (nextClip && !videoUrlCache[nextClip.id]) {
+        if (!isDemoMode() && nextClip && !videoUrlCache[nextClip.id]) {
           api.getVideoUrl(nextClip.id).then((data) => {
             if (data.video_url) videoUrlCache[nextClip.id] = data.video_url;
           }).catch(() => {});
         }
 
         if (user) {
-          // Authenticated — votes always count
           if (direction === 'right') {
-            api.likeClip(currentClip.id).catch(() => {});
-          } else {
+            if (isDemoMode()) {
+              pushDemoQueue(currentClip);
+            } else {
+              api.likeClip(currentClip.id).catch(() => {});
+            }
+          } else if (!isDemoMode()) {
             api.dislikeClip(currentClip.id).catch(() => {});
           }
         } else {
@@ -340,9 +351,8 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
           }
         }
 
-        // Fetch more clips before running out
         const newIndex = currentIndex + 1;
-        if (newIndex >= clips.length - 2) {
+        if (!isDemoMode() && newIndex >= clips.length - 2) {
           api
             .getClips({ ...clipRequestOpts, excludeClipIds: [...getSeenClipIds()] })
             .then((data) => {
@@ -717,6 +727,7 @@ export const SwipePage: React.FC<SwipePageProps> = ({ user, onOpenComments }) =>
             {/* Like arrow */}
             <button
               className={`btn-side btn-accept ${acceptHighlight ? 'highlight' : ''}`}
+              data-testid="btn-like"
               onClick={() => handleSwipe('right')}
               title="Like"
             >

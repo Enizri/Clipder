@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../api/client';
+import { isDemoMode, readDemoQueue, removeDemoQueue } from '../demo/demoClips';
 import type { AdminClip, User } from '../types';
 
 interface AiMessage {
@@ -13,6 +14,12 @@ interface AiMessage {
 
 interface QueueClip extends AdminClip {
   marked_for_export: boolean;
+  transcript?: string;
+  analysisTitle?: string;
+  analysisScore?: number;
+  analysisDescription?: string;
+  analyzing?: boolean;
+  uploading?: boolean;
 }
 
 interface AiEditorPageProps {
@@ -55,6 +62,23 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
       setQueue([]);
       return;
     }
+    if (isDemoMode()) {
+      setQueue(
+        readDemoQueue().map((item) => ({
+          id: item.id,
+          title: item.title,
+          url: item.url,
+          channel: item.channel,
+          thumbnail_url: item.thumbnail_url,
+          view_count: item.view_count,
+          creator_name: item.creator_name,
+          duration: item.duration,
+          created_at: item.created_at,
+          marked_for_export: false,
+        })),
+      );
+      return;
+    }
     api
       .getUserClipHistory()
       .then((response) => {
@@ -89,6 +113,10 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
       setSelectedClip(null);
       setChatMessages([]);
     }
+    if (isDemoMode()) {
+      removeDemoQueue(clipId);
+      return;
+    }
     try {
       await api.deleteClipFromHistory(clipId);
     } catch {
@@ -96,15 +124,94 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
     }
   };
 
-  const handleMarkForExport = async (clip: QueueClip) => {
+  const handleAnalyze = async (clip: QueueClip) => {
+    setSelectedClip(clip);
+    setQueue((prev) => prev.map((c) => (c.id === clip.id ? { ...c, analyzing: true } : c)));
+    setStatusMessage('Groq is transcribing and scoring this clip…');
     try {
-      const result = await api.markClipForExport(clip.id);
+      let transcript: string;
+      let score: number;
+      let title: string;
+      let description: string;
+      if (isDemoMode()) {
+        await new Promise((r) => setTimeout(r, 700));
+        transcript = `[00:02] wait wait wait — ${clip.title.toLowerCase()}
+[00:08] chat is going crazy
+[00:14] that's the clip. that's the one.`;
+        score = 0.86;
+        title = `${clip.title} 🔥`;
+        description = `${clip.title} — cut for YouTube Shorts & TikTok. #twitch #gaming`;
+      } else {
+        const data = await api.analyzeClip(clip.id);
+        transcript = data.transcript;
+        score = data.score;
+        title = data.title;
+        description = data.description;
+      }
       setQueue((prev) =>
-        prev.map((c) => (c.id === clip.id ? { ...c, marked_for_export: true } : c)),
+        prev.map((c) =>
+          c.id === clip.id
+            ? {
+                ...c,
+                analyzing: false,
+                transcript,
+                analysisScore: score,
+                analysisTitle: title,
+                analysisDescription: description,
+              }
+            : c,
+        ),
       );
-      setStatusMessage(result.message);
+      setSelectedClip((prev) =>
+        prev && prev.id === clip.id
+          ? { ...prev, transcript, analysisScore: score, analysisTitle: title, analysisDescription: description }
+          : prev,
+      );
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          _id: Date.now(),
+          role: 'assistant',
+          content: `Transcript ready (score ${Math.round(score * 100)}%).\n\n${transcript}\n\nSuggested title: ${title}`,
+        },
+      ]);
+      setStatusMessage('Analysis done. Upload to YouTube Shorts and TikTok when you want.');
     } catch {
-      setStatusMessage('Could not mark this clip for export.');
+      setQueue((prev) => prev.map((c) => (c.id === clip.id ? { ...c, analyzing: false } : c)));
+      setStatusMessage('Analysis failed. Try again.');
+    }
+  };
+
+  const handleUpload = async (clip: QueueClip) => {
+    if (!clip.transcript) {
+      await handleAnalyze(clip);
+    }
+    setQueue((prev) => prev.map((c) => (c.id === clip.id ? { ...c, uploading: true } : c)));
+    setStatusMessage('Queuing YouTube Shorts and TikTok…');
+    try {
+      if (isDemoMode()) {
+        await new Promise((r) => setTimeout(r, 600));
+      } else {
+        await api.uploadClip(clip.id, ['youtube_shorts', 'tiktok']);
+      }
+      setQueue((prev) =>
+        prev.map((c) =>
+          c.id === clip.id ? { ...c, uploading: false, marked_for_export: true } : c,
+        ),
+      );
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          _id: Date.now(),
+          role: 'assistant',
+          content:
+            'Queued for YouTube Shorts and TikTok. Live publish still needs platform credentials — this records the export decision.',
+        },
+      ]);
+      setStatusMessage('Queued for YouTube Shorts + TikTok.');
+    } catch {
+      setQueue((prev) => prev.map((c) => (c.id === clip.id ? { ...c, uploading: false } : c)));
+      setStatusMessage('Upload queue failed.');
     }
   };
 
@@ -404,9 +511,10 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
                   onDragStart={(e) => {
                     e.dataTransfer.setData('clipData', JSON.stringify(clip));
                   }}
-                  onMouseEnter={async (e) => {
+                    onMouseEnter={async (e) => {
                     (e.currentTarget as HTMLElement).style.transform = 'scale(1.03)';
                     setHoveredClipId(clip.id);
+                    if (isDemoMode()) return;
                     if (!hoveredVideoUrl || hoveredClipId !== clip.id) {
                       try {
                         const data = await api.getVideoUrl(clip.id);
@@ -462,8 +570,26 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
                     >
                       {clip.title}
                     </div>
+                    {clip.transcript && (
+                      <div
+                        style={{
+                          fontSize: '0.62em',
+                          color: 'rgba(196,181,253,0.95)',
+                          lineHeight: 1.35,
+                          maxHeight: '3.2em',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        {clip.analysisScore != null
+                          ? `Score ${Math.round(clip.analysisScore * 100)}% · `
+                          : ''}
+                        {clip.transcript}
+                      </div>
+                    )}
                     {clip.marked_for_export && (
-                      <span style={{ fontSize: '0.65em', color: '#6ee7b7' }}>Marked for export</span>
+                      <span style={{ fontSize: '0.65em', color: '#6ee7b7' }}>
+                        Queued · YouTube Shorts + TikTok
+                      </span>
                     )}
                     <div style={{ display: 'flex', gap: '6px' }}>
                       <button
@@ -487,27 +613,58 @@ export const AiEditorPage: React.FC<AiEditorPageProps> = ({ user, onShowAuth }) 
                       </button>
                       <button
                         type="button"
+                        data-testid={`btn-analyze-${clip.id}`}
                         onClick={(e) => {
                           e.stopPropagation();
-                          void handleMarkForExport(clip);
+                          handleDropClip(clip);
+                          void handleAnalyze(clip);
                         }}
-                        disabled={clip.marked_for_export}
+                        disabled={Boolean(clip.analyzing) || Boolean(clip.transcript)}
                         style={{
                           flex: 1,
                           padding: '4px 6px',
                           fontSize: '0.7em',
                           border: 'none',
                           borderRadius: '6px',
-                          background: clip.marked_for_export
-                            ? 'rgba(52,211,153,0.4)'
-                            : 'rgba(16,185,129,0.9)',
+                          background: clip.transcript
+                            ? 'rgba(139,92,246,0.45)'
+                            : 'rgba(139,92,246,0.95)',
                           color: 'white',
-                          cursor: clip.marked_for_export ? 'default' : 'pointer',
+                          cursor: clip.transcript || clip.analyzing ? 'default' : 'pointer',
                         }}
                       >
-                        Export
+                        {clip.analyzing ? 'Analyzing…' : clip.transcript ? 'Analyzed' : 'Analyze'}
                       </button>
                     </div>
+                    <button
+                      type="button"
+                      data-testid={`btn-upload-${clip.id}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDropClip(clip);
+                        void handleUpload(clip);
+                      }}
+                      disabled={clip.marked_for_export || Boolean(clip.uploading)}
+                      style={{
+                        width: '100%',
+                        padding: '6px 6px',
+                        fontSize: '0.68em',
+                        fontWeight: 700,
+                        border: 'none',
+                        borderRadius: '6px',
+                        background: clip.marked_for_export
+                          ? 'rgba(52,211,153,0.4)'
+                          : 'rgba(16,185,129,0.95)',
+                        color: 'white',
+                        cursor: clip.marked_for_export || clip.uploading ? 'default' : 'pointer',
+                      }}
+                    >
+                      {clip.uploading
+                        ? 'Uploading…'
+                        : clip.marked_for_export
+                          ? 'Uploaded'
+                          : 'Upload YouTube Shorts + TikTok'}
+                    </button>
                   </div>
                 </div>
               ))}

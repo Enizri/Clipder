@@ -60,7 +60,7 @@ Task: Refactor ClipApp to FastAPI + React/TS/Vite
 ```
 ClipApp/
 ├── pyproject.toml                # Dependencies managed with uv
-├── main.py                       # FastAPI entry point with 7 routers + WebSocket
+├── main.py                       # FastAPI entry point with 8 routers + WebSocket
 ├── alembic.ini                   # Database migration config
 ├── alembic/
 │   ├── env.py
@@ -79,7 +79,8 @@ ClipApp/
 │   │           ├── vote.py      # Vote endpoints
 │   │           ├── admin.py     # Admin-only process queue
 │   │           ├── following.py # Following management
-│   │           └── ai_chat.py   # AI chat/transcription endpoints
+│   │           ├── ai_chat.py   # AI chat/transcription endpoints
+│   │           └── ai_editor.py # Playground queue, analyze, multi-platform upload
 │   ├── core/
 │   │   ├── config.py            # Pydantic Settings (Twitch OAuth, Supabase, JWT settings)
 │   │   ├── security.py          # JWT & Bcrypt hashing logic
@@ -129,7 +130,7 @@ ClipApp/
 
 ---
 
-## 5.5 Current API Endpoints (7 Routers)
+## 5.5 Current API Endpoints (8 Routers)
 
 | Module | Endpoint Route | Purpose |
 |--------|---|---------|
@@ -137,9 +138,10 @@ ClipApp/
 | **clips.py** | `/api/v1/clips/*` | Get clips, swipe/like interactions, clip details |
 | **leaderboard.py** | `/api/v1/leaderboard/*` | Top 10 monthly clips with WebSocket broadcasting |
 | **votes.py** | `/api/v1/votes/*` | User vote management (like/unlike clips) |
-| **admin.py** | `/api/v1/admin/*` | Pro playlist upload, admin queue, category management |
+| **admin.py** | `/api/v1/admin/*` | Admin-only queue and process (keep admin-only) |
 | **following.py** | `/api/v1/following/*` | Add/remove followed streamers |
 | **ai_chat.py** | `/api/v1/ai/*` | AI transcription, chat endpoints |
+| **ai_editor.py** | `/api/v1/ai-editor/*` | Playground queue, clip analyze, queued YouTube/TikTok export |
 
 ### WebSocket Endpoint
 - **`/ws/leaderboard`** – Real-time leaderboard updates via `ConnectionManager.broadcast()` singleton

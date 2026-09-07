@@ -9,6 +9,7 @@ import { LeaderboardPage } from './pages/LeaderboardPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { AiEditorPage } from './pages/AiEditorPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { isDemoMode, DEMO_USER } from './demo/demoClips';
 
 // ==============================================================================
 // HEADER (inner — has access to useNavigate)
@@ -44,7 +45,11 @@ const Header: React.FC<HeaderProps> = ({ user, onShowAuth, onLogout }) => {
         <NavLink className={({ isActive }) => `tab-btn${isActive ? ' active' : ''}`} to="/analytics">
           📊 Analytics
         </NavLink>
-        <NavLink className={({ isActive }) => `tab-btn${isActive ? ' active' : ''}`} to="/ai-editor">
+        <NavLink
+          className={({ isActive }) => `tab-btn${isActive ? ' active' : ''}`}
+          to="/ai-editor"
+          data-testid="nav-playground"
+        >
           Playground
         </NavLink>
         <NavLink className={({ isActive }) => `tab-btn${isActive ? ' active' : ''}`} to="/profile">
@@ -80,7 +85,7 @@ const Header: React.FC<HeaderProps> = ({ user, onShowAuth, onLogout }) => {
 // ==============================================================================
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => (isDemoMode() ? DEMO_USER : null));
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [activeCommentClip, setActiveCommentClip] = useState<{ id: string; title: string } | null>(null);
@@ -95,6 +100,11 @@ export default function App() {
       // Fresh token from Twitch OAuth redirect — store and clean URL
       localStorage.setItem('token', callbackToken);
       window.history.replaceState({}, '', window.location.pathname);
+    }
+
+    if (isDemoMode()) {
+      setUser(DEMO_USER);
+      return;
     }
 
     const token = callbackToken || localStorage.getItem('token');

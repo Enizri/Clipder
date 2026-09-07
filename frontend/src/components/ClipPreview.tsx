@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { api } from '../api/client';
+import { isDemoMode } from '../demo/demoClips';
 import { videoUrlCache } from '../utils/videoCache';
 import type { Clip } from '../types';
 
@@ -26,7 +27,7 @@ export const ClipPreview = React.memo(function ClipPreview({
   const [isHovering, setIsHovering] = useState(false);
 
   const fetchVideoUrl = useCallback(() => {
-    if (videoSrc) return;
+    if (videoSrc || isDemoMode()) return;
     if (videoUrlCache[clip.id]) {
       setVideoSrc(videoUrlCache[clip.id]);
       return;
@@ -133,7 +134,7 @@ export const ClipPreview = React.memo(function ClipPreview({
 
   return (
     <div
-      className="clip-preview"
+      className={`clip-preview${isDemoMode() ? ' demo-cover' : ''}`}
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
     >
