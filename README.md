@@ -82,6 +82,11 @@ uv run pytest
 
 Frontend checks run from `frontend/` with `npm run lint` and `npm run build`.
 
+For a production frontend build, run `npm ci` followed by `npm run build` in
+`frontend/` using Node.js 22+. Output is generated in `frontend/dist/` and is
+ignored by Git. CI checks frontend builds on pushes and pull requests to `main`;
+it does not commit generated files.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
