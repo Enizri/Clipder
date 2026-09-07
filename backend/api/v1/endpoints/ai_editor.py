@@ -1,10 +1,13 @@
 import uuid
 import json
 from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.api.v1.clip_queue import append_export_mark, parse_export_flag
 from backend.api.v1.deps import get_current_user
 from backend.core.database import get_db
 from backend.models import User, UserClipHistory
@@ -18,19 +21,30 @@ from backend.schemas.clip_history import (
 router = APIRouter(prefix="/api/v1/ai-editor", tags=["ai-editor"])
 
 
+class ExportStatusResponse(BaseModel):
+    status: str
+    message: str
+    marked_for_export: bool = True
+
+
 @router.post("/history/save", response_model=ClipHistoryResponse)
 async def save_clip_to_history(
     request: ClipHistoryCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Save a clip to user's AI Editor history (PRO only)."""
+    """Save a clip to the logged-in user's playground queue."""
 
-    # Check if user is PRO
-    if current_user.role.value not in ["PRO", "ADMIN"]:
-        raise HTTPException(
-            status_code=403, detail="Only PRO users can save clips to history"
+    existing = await db.execute(
+        select(UserClipHistory).where(
+            (UserClipHistory.user_id == current_user.id)
+            & (UserClipHistory.clip_id == request.clip_id)
         )
+    )
+    prior = existing.scalars().first()
+    if prior:
+        return ClipHistoryResponse.model_validate(prior)
+
 
     # Create new history entry
     history_id = str(uuid.uuid4())
@@ -66,11 +80,7 @@ async def get_user_clip_history(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get all saved clips for current user."""
-
-    # Check if user is PRO
-    if current_user.role.value not in ["PRO", "ADMIN"]:
-        raise HTTPException(status_code=403, detail="Only PRO users can view history")
+    """Get the current user's playground queue."""
 
     result = await db.execute(
         select(UserClipHistory)
@@ -94,11 +104,7 @@ async def delete_clip_from_history(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a clip from user's history by clip_id."""
-
-    # Check if user is PRO
-    if current_user.role.value not in ["PRO", "ADMIN"]:
-        raise HTTPException(status_code=403, detail="Only PRO users can manage history")
+    """Remove a clip from the user's playground queue (skip export)."""
 
     # Find and delete all entries for this clip by current user
     result = await db.execute(
@@ -128,11 +134,7 @@ async def clear_all_history(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Clear all history entries for current user."""
-
-    # Check if user is PRO
-    if current_user.role.value not in ["PRO", "ADMIN"]:
-        raise HTTPException(status_code=403, detail="Only PRO users can manage history")
+    """Clear the current user's playground queue."""
 
     await db.execute(
         delete(UserClipHistory).where(UserClipHistory.user_id == current_user.id)
@@ -153,10 +155,6 @@ async def delete_history_entry(
 ):
     """Delete a specific history entry by its UUID."""
 
-    # Check if user is PRO
-    if current_user.role.value not in ["PRO", "ADMIN"]:
-        raise HTTPException(status_code=403, detail="Only PRO users can manage history")
-
     # Find and delete the entry
     result = await db.execute(
         select(UserClipHistory).where(
@@ -175,4 +173,42 @@ async def delete_history_entry(
     return DeleteHistoryResponse(
         status="success",
         message="Clip removed from history",
+    )
+
+
+@router.post(
+    "/history/clip/{clip_id}/export", response_model=ExportStatusResponse
+)
+async def mark_clip_for_export(
+    clip_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ExportStatusResponse:
+    """Mark a queued clip for later multi-platform export.
+
+    Upload adapters in the engine are not connected; this records the user's
+    decision so they can skip or keep clips independently of the leaderboard vote.
+    """
+    result = await db.execute(
+        select(UserClipHistory).where(
+            (UserClipHistory.clip_id == clip_id)
+            & (UserClipHistory.user_id == current_user.id)
+        )
+    )
+    entry = result.scalars().first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Clip not found in your queue")
+
+    already = parse_export_flag(entry.edit_history)
+    if not already:
+        append_export_mark(entry)
+        await db.commit()
+
+    return ExportStatusResponse(
+        status="queued",
+        message=(
+            "Marked for export. YouTube/TikTok upload is not connected yet; "
+            "the clip stays in your queue."
+        ),
+        marked_for_export=True,
     )

@@ -48,6 +48,7 @@ class Settings(BaseSettings):
 
     # Groq
     groq_api_key: str = ""
+    groq_chat_model: str = "llama-3.3-70b-versatile"
 
     # Opus Clip (optional)
     opus_clip_api_key: str = ""

@@ -11,13 +11,13 @@ vote (like / dislike), and a real-time leaderboard tracks the top clips each mon
 ## Features
 
 - **Swipe & Vote** — card-swipe interface for discovering Twitch clips
+- **Playground** — logged-in users send liked clips to a personal queue, skip or mark for export, and chat with Groq
 - **Video Preview** — Hover-to-preview with volume controls
 - **Theater Mode** — Full-screen viewing experience
 - **Comments** — Real-time clip comments with Twitch emote support
 - **Leaderboard** — Monthly ranked clips with live WebSocket updates
-- **AI Editor** — Groq-powered clip transcription and AI chat (PRO)
 - **Analytics** — Visual dashboards with Recharts
-- **Admin Queue** — Manage clips ready for multi-platform upload
+- **Admin Queue** — Admin-only process endpoints
 - **Twitch OAuth** — Link your Twitch account, sync followed channels
 
 ## Tech Stack
@@ -220,6 +220,7 @@ All routes live under `/api/v1/`. The backend exposes these router groups:
 | `TWITCH_CLIENT_ID` | **Yes** | — | Twitch OAuth client ID |
 | `TWITCH_CLIENT_SECRET` | **Yes** | — | Twitch OAuth client secret |
 | `GROQ_API_KEY` | **Yes** | — | Groq API key for AI features |
+| `GROQ_CHAT_MODEL` | No | `llama-3.3-70b-versatile` | Groq cloud chat model (playground). Not a local LLM. |
 | `TWITCH_CHANNELS` | **Yes** | — | Comma-separated channel names |
 | `TWITCH_CATEGORIES` | **Yes** | — | Comma-separated category names |
 | `FRONTEND_URL` | No | `http://localhost:3000` | CORS allowed origin |

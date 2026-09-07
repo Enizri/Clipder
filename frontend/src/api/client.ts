@@ -203,10 +203,33 @@ export const api = {
   }): Promise<unknown> =>
     fetchJson('/ai-editor/history/save', { method: 'POST', body: JSON.stringify(data) }),
 
-  getUserClipHistory: (): Promise<{ history: any[] }> => fetchJson('/ai-editor/history'),
+  getUserClipHistory: (): Promise<{
+    history: Array<{
+      clip_id: string;
+      clip_title: string;
+      clip_url: string;
+      clip_channel: string;
+      thumbnail_url?: string | null;
+      edit_history?: string | null;
+    }>;
+    total: number;
+  }> => fetchJson('/ai-editor/history'),
 
   deleteClipFromHistory: (clipId: string): Promise<unknown> =>
     fetchJson(`/ai-editor/history/clip/${clipId}`, { method: 'DELETE' }),
+
+  markClipForExport: (
+    clipId: string,
+  ): Promise<{ status: string; message: string; marked_for_export: boolean }> =>
+    fetchJson(`/ai-editor/history/clip/${clipId}/export`, { method: 'POST' }),
+
+  chatForClip: (data: {
+    clip_title: string;
+    clip_channel: string;
+    user_message: string;
+    conversation_history: Array<{ role: string; content: string }>;
+  }): Promise<{ response: string; suggestions: string[] }> =>
+    fetchJson('/ai/chat', { method: 'POST', body: JSON.stringify(data) }),
 
   clearAllHistory: (): Promise<unknown> =>
     fetchJson('/ai-editor/history/clear-all', { method: 'DELETE' }),

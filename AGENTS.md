@@ -1,5 +1,11 @@
 # Clipder - Agent Guidelines
 
+Canonical instructions for all coding agents (Cursor, Claude Code, Codex, Copilot).
+
+- **Claude Code:** start at [CLAUDE.md](./CLAUDE.md), which only points here. Do not copy rules into `CLAUDE.md`.
+- **Humans:** [README.md](./README.md) is the project overview.
+- Update this file in the same change when routes, models, env vars, or layout change.
+
 ## Role & Task
 
 ```
@@ -71,7 +77,7 @@ ClipApp/
 │   │           ├── clips.py     # Swipe & Like logic
 │   │           ├── leaderboard.py # Top 10 Monthly, WebSocket broadcast
 │   │           ├── vote.py      # Vote endpoints
-│   │           ├── admin.py     # Pro Playground & Admin queue
+│   │           ├── admin.py     # Admin-only process queue
 │   │           ├── following.py # Following management
 │   │           └── ai_chat.py   # AI chat/transcription endpoints
 │   ├── core/

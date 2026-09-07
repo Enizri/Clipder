@@ -9,6 +9,7 @@ from sqlalchemy import select
 from backend.core.database import get_db
 from backend.models import User, Clip, Vote, VoteType
 from backend.api.v1.deps import get_current_user
+from backend.api.v1.clip_queue import enqueue_liked_clip
 from backend.core.tasks import job_calculate_top_10
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,13 @@ async def vote_on_clip(
         if not fresh:
             raise HTTPException(status_code=404, detail="Clip not found")
         logger.debug("User %s re-voted %s on clip %s (idempotent)", current_user.id, vote_type, clip.id)
+        if vote_type == "like":
+            try:
+                await enqueue_liked_clip(db, current_user, fresh)
+                await db.commit()
+            except Exception as e:
+                logger.warning("Playground queue enqueue failed after re-vote: %s", e)
+                await db.rollback()
         try:
             await job_calculate_top_10(force_broadcast=True)
         except Exception as e:
@@ -80,6 +88,14 @@ async def vote_on_clip(
             "current_dislikes": fresh.monthly_dislikes,
             "current_score": fresh.monthly_likes - fresh.monthly_dislikes,
         }
+
+    if vote_type == "like":
+        try:
+            await enqueue_liked_clip(db, current_user, clip)
+            await db.commit()
+        except Exception as e:
+            logger.warning("Playground queue enqueue failed after like: %s", e)
+            await db.rollback()
 
     logger.info("User %s voted %s on clip %s", current_user.id, vote_type, clip.id)
 

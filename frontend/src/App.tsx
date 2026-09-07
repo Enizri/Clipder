@@ -45,7 +45,7 @@ const Header: React.FC<HeaderProps> = ({ user, onShowAuth, onLogout }) => {
           📊 Analytics
         </NavLink>
         <NavLink className={({ isActive }) => `tab-btn${isActive ? ' active' : ''}`} to="/ai-editor">
-          🚀 AI Editor
+          Playground
         </NavLink>
         <NavLink className={({ isActive }) => `tab-btn${isActive ? ' active' : ''}`} to="/profile">
           Profile
@@ -164,7 +164,7 @@ export default function App() {
           <Route path="/" element={<SwipePage user={user} onOpenComments={openComments} />} />
           <Route path="/leaderboard" element={<LeaderboardPage onOpenComments={openComments} />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
-          <Route path="/ai-editor" element={<AiEditorPage user={user} />} />
+          <Route path="/ai-editor" element={<AiEditorPage user={user} onShowAuth={() => setShowAuthModal(true)} />} />
           <Route
             path="/profile"
             element={
