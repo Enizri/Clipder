@@ -36,8 +36,18 @@ const FPS = 25;
 const PLAYWRIGHT_CACHE = path.join(os.homedir(), '.cache', 'clipder-playwright');
 
 /**
- * The pointer is a real Chromium mouse; this element only mirrors it so viewers can
- * see where the input is happening. It is driven by mouse events, never animated,
+ * macOS arrow shape (straight left edge, notch, trailing tail). Filled white rather than
+ * the system black so it stays readable on Clipder's near-black UI. The path's tip sits at
+ * the element's origin, so `left`/`top` can be set straight from clientX/clientY.
+ */
+const MAC_ARROW_SVG =
+  "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 23'>" +
+  "<path d='M1.4 1.3 L1.4 19.7 L6.3 14.9 L9.5 21.6 L12.4 20.2 L9.2 13.7 L15 13.7 Z' " +
+  "fill='%23ffffff' stroke='%23111111' stroke-width='1.2' stroke-linejoin='round'/></svg>";
+
+/**
+ * The pointer is a real Chromium mouse; these elements only mirror it so viewers can
+ * see where the input is happening. They are driven by mouse events, never animated,
  * so the drawn cursor and the app's hover/drag state can never drift apart.
  */
 const CURSOR_CSS = `
@@ -45,19 +55,34 @@ const CURSOR_CSS = `
   position: fixed;
   left: 50%;
   top: 55%;
-  width: 22px;
-  height: 22px;
-  border: 2.5px solid #fff;
-  border-radius: 14px 14px 14px 3px;
-  background: linear-gradient(135deg, #f5d0fe, #8b5cf6);
-  box-shadow: 0 6px 16px rgba(0,0,0,0.5), 0 0 0 3px rgba(139,92,246,0.28);
+  width: 17px;
+  height: 24px;
+  background: no-repeat left top / contain url("data:image/svg+xml,${MAC_ARROW_SVG}");
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.6));
+  transform: translate(-1px, -1px);
   z-index: 2147483647;
   pointer-events: none;
-  transition: transform 0.12s ease;
-  transform: translate(-3px, -3px) rotate(-18deg);
 }
-#clipder-demo-cursor.is-down {
-  transform: translate(-3px, -3px) rotate(-18deg) scale(0.76);
+/* Press feedback: a ring around the hotspot, so the arrow itself never distorts. */
+#clipder-demo-cursor-ring {
+  position: fixed;
+  left: 50%;
+  top: 55%;
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border: 3px solid rgba(249, 138, 197, 1);
+  border-radius: 50%;
+  box-shadow: 0 0 16px rgba(236, 72, 153, 0.7);
+  opacity: 0;
+  transform: scale(0.35);
+  transition: opacity 0.16s ease-out, transform 0.16s ease-out;
+  z-index: 2147483646;
+  pointer-events: none;
+}
+#clipder-demo-cursor-ring.is-down {
+  opacity: 1;
+  transform: scale(1);
 }
 `;
 
@@ -172,7 +197,7 @@ function densify(frames, fps) {
     while (i + 1 < frames.length && frames[i + 1].t <= t) i += 1;
     out.push(frames[i]);
   }
-  const hold = Math.round(fps * 1.4);
+  const hold = Math.round(fps * 1.1);
   for (let k = 0; k < hold; k += 1) out.push(frames[frames.length - 1]);
   return out;
 }
@@ -182,18 +207,22 @@ async function installCursor(page) {
   await page.evaluate(() => {
     const el = document.createElement('div');
     el.id = 'clipder-demo-cursor';
-    document.body.appendChild(el);
+    const ring = document.createElement('div');
+    ring.id = 'clipder-demo-cursor-ring';
+    document.body.append(ring, el);
     const opts = { capture: true, passive: true };
     window.addEventListener(
       'mousemove',
       (e) => {
         el.style.left = `${e.clientX}px`;
         el.style.top = `${e.clientY}px`;
+        ring.style.left = `${e.clientX}px`;
+        ring.style.top = `${e.clientY}px`;
       },
       opts,
     );
-    window.addEventListener('mousedown', () => el.classList.add('is-down'), opts);
-    window.addEventListener('mouseup', () => el.classList.remove('is-down'), opts);
+    window.addEventListener('mousedown', () => ring.classList.add('is-down'), opts);
+    window.addEventListener('mouseup', () => ring.classList.remove('is-down'), opts);
   });
 }
 
@@ -227,9 +256,9 @@ async function glideToLocator(page, locator, ms = 700) {
 
 async function clickHere(page) {
   await page.mouse.down();
-  await sleep(130);
+  await sleep(110);
   await page.mouse.up();
-  await sleep(130);
+  await sleep(110);
 }
 
 /**
@@ -244,11 +273,11 @@ async function dragSwipe(page, direction = 'right') {
   // 42% down the card clears the hover controls at the top and the info overlay at the bottom.
   const grabX = box.x + box.width / 2;
   const grabY = box.y + box.height * 0.42;
-  await glideTo(page, grabX, grabY, 520);
-  await sleep(260);
+  await glideTo(page, grabX, grabY, 440);
+  await sleep(190);
 
   await page.mouse.down();
-  await sleep(140);
+  await sleep(120);
 
   // Release shortly past the commit threshold: a flick, not a drag across the whole window.
   const sign = direction === 'right' ? 1 : -1;
@@ -314,44 +343,44 @@ async function main() {
   });
 
   // 1. Let people read the first swipe card
-  await sleep(2100);
+  await sleep(1550);
 
   // 2. Swipe the first clip right by dragging it off the stack
   await dragSwipe(page, 'right');
   await page.getByText('Emperor failed charisma check').waitFor({ timeout: 10000 });
   await waitForHdThumbnails(page);
-  await sleep(1400);
+  await sleep(1000);
 
   // 3. Second swipe — Playground waits until this one so both clips are in the queue
   await dragSwipe(page, 'right');
   await page.getByText('Stax + Zest INSTANT 2v4 vs FPX').waitFor({ timeout: 10000 });
   await waitForHdThumbnails(page);
-  await sleep(1300);
+  await sleep(950);
 
   // 4. Open Playground and show the queued clips
-  await glideToLocator(page, playgroundTab, 800);
-  await sleep(280);
+  await glideToLocator(page, playgroundTab, 680);
+  await sleep(220);
   await clickHere(page);
   await page.getByRole('heading', { name: 'Your queue' }).waitFor({ timeout: 10000 });
   await page.getByText('Emperor failed charisma check').waitFor({ timeout: 10000 });
   await page.getByText('Clip for Anna').waitFor({ timeout: 10000 });
-  await sleep(2200);
+  await sleep(1700);
 
   // 5. Analyze and leave the transcript on screen
   const analyzeBtn = page.getByRole('button', { name: 'Analyze' }).first();
   const uploadBtn = page.getByRole('button', { name: /Upload Shorts/ }).first();
-  await glideToLocator(page, analyzeBtn, 640);
-  await sleep(280);
+  await glideToLocator(page, analyzeBtn, 540);
+  await sleep(220);
   await clickHere(page);
   await page.getByText('Transcript ready').waitFor({ timeout: 10000 });
-  await sleep(2400);
+  await sleep(1900);
 
   // 6. Queue YouTube Shorts + TikTok and hold the success state
-  await glideToLocator(page, uploadBtn, 560);
-  await sleep(280);
+  await glideToLocator(page, uploadBtn, 470);
+  await sleep(220);
   await clickHere(page);
   await page.getByText('Queued for YouTube Shorts + TikTok.').waitFor({ timeout: 10000 });
-  await sleep(2400);
+  await sleep(1900);
 
   await session.send('Page.stopScreencast');
   await sleep(80);
