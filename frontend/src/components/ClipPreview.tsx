@@ -134,18 +134,20 @@ export const ClipPreview = React.memo(function ClipPreview({
 
   return (
     <div
-      className={`clip-preview${isDemoMode() ? ' demo-cover' : ''}`}
+      className="clip-preview"
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
     >
       <div className="blur-bg-container">
-        <img src={clip.thumbnail_url} alt="" draggable={false} />
+        <img src={clip.thumbnail_url} alt="" draggable={false} decoding="async" />
       </div>
       <img
         src={clip.thumbnail_url}
         className="clip-thumbnail"
         alt={clip.title}
         draggable={false}
+        decoding="sync"
+        fetchPriority="high"
         style={{ opacity: isPlaying ? 0 : 1 }}
       />
       <video

@@ -29,7 +29,7 @@ export const DEMO_CLIPS: Clip[] = [
     title: 'Clip for Anna',
     url: 'https://clips.twitch.tv/SeductivePerfectClipsdadOneHand-QDHtFh3QBebzcPAV',
     thumbnail_url:
-      'https://static-cdn.jtvnw.net/twitch-clips-thumbnails-prod/SeductivePerfectClipsdadOneHand-QDHtFh3QBebzcPAV/b46f9699-bbd3-4b7f-96af-05b0bdaea68b/preview-480x272.jpg',
+      'https://static-cdn.jtvnw.net/twitch-video-assets/twitch-vap-video-assets-prod-us-west-2/a6e7ed85-74fe-44b9-8b9f-cc1428cb811a/landscape/thumb/thumb-0000000000-1920x1080.jpg',
     view_count: 184200,
     creator_name: 'xAnnaGrace',
     duration: 28,
@@ -56,7 +56,8 @@ export const DEMO_CLIPS: Clip[] = [
     id: 'SourHilariousFishPeteZaroll-c13qZ1aGXTzxWz-e',
     title: 'Stax + Zest INSTANT 2v4 vs FPX',
     url: 'https://clips.twitch.tv/SourHilariousFishPeteZaroll-c13qZ1aGXTzxWz-e',
-    thumbnail_url: 'https://static-cdn.jtvnw.net/ttv-boxart/VALORANT-285x380.jpg',
+    thumbnail_url:
+      'https://static-cdn.jtvnw.net/twitch-video-assets/twitch-vap-video-assets-prod-us-west-2/bfe6497f-e31b-4d6d-b7f2-af5158552b66/landscape/thumb/thumb-0000000000-1920x1080.jpg',
     view_count: 241000,
     creator_name: 'tarik',
     duration: 34,
