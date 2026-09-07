@@ -7,7 +7,23 @@ platforms.
 
 ![Clipder demo: swipe a Twitch clip, open the Playground queue, analyze, and mark it for export](docs/screenshots/clipder-demo.gif)
 
-Built with FastAPI and React.
+## What it does
+
+- **Swipe to curate** — a Tinder-style feed of Twitch clips, filtered by game category or by the channels you follow. Preview inline or open theater mode.
+- **Community leaderboard** — monthly rankings that update live over WebSockets, with historical standings and analytics dashboards.
+- **Playground** — liked clips land in a personal queue where an LLM drafts titles, descriptions and hooks for short-form platforms, then marks clips for export.
+- **Discussion** — per-clip comments with Twitch emote rendering.
+- **Twitch OAuth** — sign in with Twitch to sync followed channels and persist your votes.
+
+## Built with
+
+| | |
+|---|---|
+| Backend | FastAPI, async SQLAlchemy 2.0, PostgreSQL, Alembic, APScheduler |
+| Frontend | React 18, TypeScript, Vite, Recharts |
+| Realtime | WebSockets for live leaderboard updates |
+| Auth | Twitch OAuth + JWT |
+| AI | Groq (Llama 3.3 70B) |
 
 ## Requirements
 
