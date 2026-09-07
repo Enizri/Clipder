@@ -81,3 +81,9 @@ TASKS
 
 # Demo GIF capture intermediates
 docs/screenshots/_frames-*/
+# ==============================================================================
+# Media (never commit third-party clip footage)
+# ==============================================================================
+*.mp4
+*.webm
+*.mov
